@@ -257,7 +257,7 @@
   // ======= spelparametrar =======
   const ROUNDS_TOTAL = 5;
   let selectedCity = null;
-  let cityCenters = {};
+  const cityCenters = {};
   let place = null;
   let guessMarker = null, trueMarker = null, line = null;
   let locked = true;
@@ -280,45 +280,23 @@
     return (toDeg(Math.atan2(y,x)) + 360) % 360;
   }
   function escapeHtml(s){ return String(s).replace(/[&<>\"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-  function setLocked(flag){ locked = flag; if(flag) map.off('click', onMapClick); else map.on('click', onMapClick); }
+  function setLocked(flag){
+    locked = flag;
+    if (typeof onMapClick === 'function') {
+      if (flag) map.off('click', onMapClick); else map.on('click', onMapClick);
+    }
+  }
 
+  // --- Leaflet-kartan ---
   const map = L.map('map').setView([62.0, 15.0], 5);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-  map.on('click', onMapClick);
+  if (typeof onMapClick === 'function') map.on('click', onMapClick); // skydda om funktionen inte finns än
 
-  fetch('/api/cities').then(r=>r.json()).then(j=>{
-    j.cities.forEach(c => { cityCenters[c.key] = c.center; });
-  });
-
-  document.querySelectorAll('.overlay .city-card').forEach(card=>{
-    function choose(){
-      selectedCity = card.getAttribute('data-city');
-      const center = cityCenters[selectedCity] || defaultCenter(selectedCity);
-      map.setView(center, 11);
-      document.getElementById('overlay').style.display = 'none';
-      document.getElementById('info').textContent = 'Klicka på kartan för att gissa.';
-      resetRounds();
-      newRound();
-    }
-    card.addEventListener('click', choose);
-    card.addEventListener('keydown', e=>{
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); }
-    });
-  });
-
-  document.getElementById('tabPlay').addEventListener('click', ()=>{
-    document.getElementById('tabPlay').classList.add('active');
-    document.getElementById('tabBoard').classList.remove('active');
-    document.getElementById('playCol').style.display = '';
-    document.getElementById('boardBox').style.display = 'none';
-  });
-  document.getElementById('tabBoard').addEventListener('click', async ()=>{
-    document.getElementById('tabBoard').classList.add('active');
-    document.getElementById('tabPlay').classList.remove('active');
-    document.getElementById('playCol').style.display = 'none';
-    document.getElementById('boardBox').style.display = '';
-    await refreshLeaderboard();
-  });
+  // --- Hämta centers för städerna (fallback finns) ---
+  fetch('/api/cities')
+    .then(r=>r.json())
+    .then(j => { (j.cities||[]).forEach(c => cityCenters[c.key] = c.center); })
+    .catch(()=>{ /* ok */ });
 
   function defaultCenter(k){
     if (k === 'stockholm') return [59.334, 18.063];
@@ -327,4 +305,69 @@
     return [62, 15];
   }
 
-  document.getElementById('btnNext').addEventListener('click',
+  function chooseCity(key){
+    selectedCity = key;
+    const center = cityCenters[key] || defaultCenter(key);
+    map.setView(center, 11);
+    const ov = document.getElementById('overlay');
+    if (ov) ov.style.display = 'none';
+    const info = document.getElementById('info');
+    if (info) info.textContent = 'Klicka på kartan för att gissa.';
+    if (typeof resetRounds === 'function') resetRounds();
+    if (typeof newRound === 'function') newRound();
+  }
+
+  // --- Event delegation på overlayn för klick/keyboard ---
+  document.addEventListener('DOMContentLoaded', () => {
+    const overlay = document.getElementById('overlay');
+    if (!overlay) return;
+
+    overlay.addEventListener('click', (e) => {
+      const card = e.target.closest('.city-card');
+      if (!card) return;
+      const key = card.dataset.city;
+      if (key) chooseCity(key);
+    });
+
+    overlay.querySelectorAll('.city-card').forEach(card => {
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          const key = card.dataset.city;
+          if (key) chooseCity(key);
+        }
+      });
+    });
+  });
+
+  // --- Flikar (spela/leaderboard) ---
+  const tabPlay = document.getElementById('tabPlay');
+  const tabBoard = document.getElementById('tabBoard');
+  if (tabPlay) tabPlay.addEventListener('click', ()=>{
+    tabPlay.classList.add('active');
+    if (tabBoard) tabBoard.classList.remove('active');
+    const playCol = document.getElementById('playCol'); if (playCol) playCol.style.display = '';
+    const boardBox = document.getElementById('boardBox'); if (boardBox) boardBox.style.display = 'none';
+  });
+  if (tabBoard) tabBoard.addEventListener('click', async ()=>{
+    tabBoard.classList.add('active');
+    if (tabPlay) tabPlay.classList.remove('active');
+    const playCol = document.getElementById('playCol'); if (playCol) playCol.style.display = 'none';
+    const boardBox = document.getElementById('boardBox'); if (boardBox) boardBox.style.display = '';
+    if (typeof refreshLeaderboard === 'function') await refreshLeaderboard();
+  });
+
+  // --- Knappar (om de finns) ---
+  const btnNext = document.getElementById('btnNext');
+  if (btnNext) btnNext.addEventListener('click', () => {
+    if (typeof newRound === 'function') newRound();
+  });
+
+  const btnEnd = document.getElementById('btnEnd');
+  if (btnEnd) btnEnd.addEventListener('click', () => {
+    if (typeof endGame === 'function') endGame();
+  });
+</script>
+
