@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <title>Geoguessr - The Nabo Way - Minimal (bearing + sticky hint)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root{
+      --brand-600: #5e725e;
+      --brand-700: #4d6151;
+      --brand-800: #3e4f42; /* Nabo-grön */
+      --beige:     #f3efe5;
+      --txt-muted: #cfd5c8;
+      --font-body: Calibri,'Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+      --radius: 12px;
+    }
+    html, body, #app { height: 100%; margin: 0; }
+    body { font-family: var(--font-body); background: var(--beige); }
+    #app { display: grid; grid-template-columns: 1fr 420px; grid-template-rows: auto 1fr; }
+    header{ grid-column:1/3; display:flex; justify-content:space-between; align-items:center;
+      padding:10px 14px; background: var(--brand-700); color: var(--beige); }
+    #map{ height: calc(100vh - 52px); }
+    .panel{ background: var(--brand-700); color: var(--beige); height: calc(100vh - 52px); overflow:auto; }
+    .box{ padding:14px 16px; border-bottom: 1px solid rgba(255,255,255,.1); }
+    .hint{ color: var(--txt-muted); }
+    .float-info{ position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+      background: var(--brand-700); color: var(--beige); padding: 12px 16px; border-radius: 10px;
+      z-index: 5000;  /* <— gör rutan alltid överst */ }
+    .toolbar{ display:flex; gap:10px; justify-content:center; margin-top:8px; }
+    .toolbar button{ background: transparent; border:1px solid rgba(255,255,255,.5); color: var(--beige); padding:8px 12px; border-radius:8px; cursor:pointer; }
+    .overlay{ position: fixed; inset:0; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,.9); z-index: 6000; }
+    .card{ background: var(--brand-700); color: var(--beige); padding:24px; border-radius: 12px; text-align:center; }
+    .cities{ display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+    .cities button{ background: var(--brand-600); border:0; color: var(--beige); padding:10px 14px; border-radius: 10px; cursor:pointer; }
+    table{ width:100%; border-collapse: collapse; color: var(--beige); }
+    th,td{ border-bottom:1px solid rgba(255,255,255,.1); padding:6px; text-align:left; }
+    th{ background: var(--brand-800); }
+    /* Custom divIcon styles */
+    .nabo-pin{
+      display: grid; place-items:center;
+      width: 30px; height: 30px; border-radius: 50%;
+      background: var(--brand-800); color: white;
+      border: 2px solid #2c3b31;
+      box-shadow: 0 2px 6px rgba(0,0,0,.35);
+      transform: translate(-15px,-15px);
+      font-size: 18px; line-height: 1;
+      user-select: none;
+    }
+    .nabo-pin svg{ width:16px; height:16px; fill:#fff; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>Geoguessr - The Nabo Way</div>
+    <nav>
+      <button id="tabPlay" class="active">Spela</button>
+      <button id="tabBoard">Leaderboard</button>
+    </nav>
+  </header>
+
+  <div id="playCol">
+    <div id="map"></div>
+    <div class="float-info">
+      <div id="place">Ledtråd: –</div>
+      <div class="toolbar">
+        <button id="btnNext">Ny plats</button>
+        <button id="btnEnd">Avsluta & spara resultat</button>
+      </div>
+      <div id="info" class="hint">Välj stad för att börja.</div>
+    </div>
+  </div>
+
+  <aside class="panel" id="sideCol">
+    <div class="box">
+      <div><strong>Rundor</strong></div>
+      <div class="hint">Klicka på kartan för att lägga en gissning. Efter varje gissning läggs en rad här.</div>
+    </div>
+    <div class="box">
+      <table id="roundsTable">
+        <thead>
+          <tr>
+            <th>#</th><th>Ledtråd</th><th>Stad</th><th>Avstånd</th><th>Felmarginal</th><th>Straffpoäng</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="sum" id="summary">0 rundor – Totala straffpoäng: 0 · Snittavstånd: 0 km</div>
+    </div>
+    <div class="box" id="boardBox" style="display:none;">
+      <div><strong>Leaderboard (lokal)</strong></div>
+      <div class="hint">Toppresultat sparas i din webbläsare.</div>
+      <table id="boardTable"><thead><tr><th>#</th><th>Namn</th><th>Straffpoäng</th><th>Rundor</th><th>Snittavstånd</th><th>Datum</th></tr></thead><tbody></tbody></table>
+    </div>
+  </aside>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="card">
+    <h1>VÄLJ STAD</h1>
+    <div class="cities">
+      <button data-city="stockholm">Stockholm</button>
+      <button data-city="goteborg">Göteborg</button>
+      <button data-city="malmo">Malmö</button>
+    </div>
+    <div class="hint">Läser stadens egna platser och panorerar kartan.</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  let selectedCity = null;
+  let cityCenters = {};
+  let place = null;
+  let guessMarker = null, trueMarker = null, line = null;
+
+  const naboGreen = "#3e4f42";
+
+  // Minimal custom icons. Arrow supports rotation degrees.
+  function makeArrowIcon(deg=0){
+    const html = '<div class="nabo-pin"><svg style="transform: rotate(' + deg + 'deg)" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l5.5 9h-4v9h-3v-9h-4L12 3z"/></svg></div>';
+    return L.divIcon({className: "", html, iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-15]});
+  }
+  function makeCheckIcon(){
+    const html = '<div class="nabo-pin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.2l-3.5-3.5-1.4 1.4L9 19 20.3 7.7l-1.4-1.4z"/></svg></div>';
+    return L.divIcon({className: "", html, iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-15]});
+  }
+
+  // Bearing from point A to B (degrees)
+  function bearingDeg(lat1, lon1, lat2, lon2){
+    const toRad = x => x * Math.PI / 180;
+    const toDeg = x => x * 180 / Math.PI;
+    const φ1 = toRad(lat1), φ2 = toRad(lat2);
+    const Δλ = toRad(lon2 - lon1);
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+    const θ = Math.atan2(y, x);
+    return (toDeg(θ) + 360) % 360; // 0..360
+  }
+
+  const map = L.map('map').setView([62.0, 15.0], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  map.on('click', onMapClick);
+
+  fetch('/api/cities').then(r=>r.json()).then(j=>{
+    j.cities.forEach(c => { cityCenters[c.key] = c.center; });
+  }).catch(err => console.error('cities error', err));
+
+  document.querySelectorAll('.overlay .cities button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      selectedCity = btn.getAttribute('data-city');
+      const center = cityCenters[selectedCity] || defaultCenter(selectedCity);
+      map.setView(center, 11);
+      document.getElementById('overlay').style.display = 'none';
+      document.getElementById('info').textContent = 'Klicka på kartan för att gissa.';
+      newRound();
+    });
+  });
+
+  function defaultCenter(k){
+    if (k === 'stockholm') return [59.334, 18.063];
+    if (k === 'goteborg')  return [57.707, 11.967];
+    if (k === 'malmo')     return [55.605, 13.003];
+    return [62, 15];
+  }
+
+  document.getElementById('btnNext').addEventListener('click', ()=>{
+    if (!selectedCity) { document.getElementById('info').textContent = 'Välj stad först.'; return; }
+    newRound();
+  });
+
+  async function newRound() {
+    try {
+      if (!selectedCity) { document.getElementById('info').textContent = 'Välj stad först.'; return; }
+      clearViz();
+      const res = await fetch('/api/round?city=' + encodeURIComponent(selectedCity));
+      if (!res.ok) throw new Error('/api/round ' + res.status);
+      const data = await res.json();
+      if (!data.place) throw new Error('ingen plats i svaret');
+      place = data.place;
+      document.getElementById('place').textContent = 'Ledtråd: ' + (place.display_name || '(saknas)');
+    } catch(e) {
+      console.error(e);
+      document.getElementById('info').textContent = 'Kunde inte ladda ny plats (' + e.message + ').';
+    }
+  }
+
+  function clearViz() {
+    if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
+    if (trueMarker)  { map.removeLayer(trueMarker);  trueMarker  = null; }
+    if (line)        { map.removeLayer(line);        line        = null; }
+  }
+
+  async function onMapClick(e) {
+    if (!selectedCity || !place) { document.getElementById('info').textContent = 'Välj stad & plats först.'; return; }
+    try {
+      clearViz();
+      // initial arrow (no bearing yet)
+      guessMarker = L.marker(e.latlng, {icon: makeArrowIcon(0)})
+        .addTo(map)
+        .bindPopup('Din gissning')
+        .openPopup();
+
+      const res = await fetch('/api/guess/map?city=' + encodeURIComponent(selectedCity), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ place_id: place.id, lat: e.latlng.lat, lon: e.latlng.lng })
+      });
+      const result = await res.json();
+
+      // rotate arrow to point towards solution
+      const brg = bearingDeg(e.latlng.lat, e.latlng.lng, result.solution.lat, result.solution.lon);
+      guessMarker.setIcon( makeArrowIcon(brg) );
+
+      trueMarker = L.marker([result.solution.lat, result.solution.lon], {icon: makeCheckIcon()})
+        .addTo(map)
+        .bindPopup('Facit: ' + [place.street, place.ort].filter(Boolean).join(', '));
+
+      line = L.polyline([[e.latlng.lat, e.latlng.lng], [result.solution.lat, result.solution.lon]],
+        { color: naboGreen, weight: 4 }).addTo(map);
+
+      const distanceKm  = Number(result.distance_km).toFixed(1);
+      const errorMargin = Math.round(result.distance_km);
+      document.getElementById('info').textContent =
+        'Avstånd: ' + distanceKm + ' km | Straffpoäng: ' + result.score;
+
+      addRoundRow(place.display_name || '(okänd)', distanceKm, errorMargin, result.score);
+    } catch(e) {
+      console.error(e);
+      document.getElementById('info').textContent = 'Tekniskt fel: ' + e;
+    }
+  }
+
+  function addRoundRow(clue, distanceKm, errorMargin, score) {
+    window._rounds = window._rounds || [];
+    const rounds = window._rounds;
+    rounds.push({ clue, distanceKm: Number(distanceKm), score, city: selectedCity });
+    const tb = document.querySelector('#roundsTable tbody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${rounds.length}</td>
+      <td>${escapeHtml(clue)}</td>
+      <td>${escapeHtml(CITY_LABELS[selectedCity] || selectedCity || "-")}</td>
+      <td>${distanceKm}</td>
+      <td>${errorMargin}</td>
+      <td>${score}</td>
+    `;
+    tb.appendChild(tr);
+    updateSummary(rounds);
+  }
+
+  function updateSummary(rounds) {
+    if (!rounds || rounds.length === 0) {
+      document.getElementById('summary').textContent = '0 rundor – Totala straffpoäng: 0 · Snittavstånd: 0 km';
+      return;
+    }
+    const totalPoints = rounds.reduce((s,r)=>s+r.score, 0);
+    const avgDist = (rounds.reduce((s,r)=>s+r.distanceKm, 0) / rounds.length).toFixed(1);
+    document.getElementById('summary').textContent =
+      `${rounds.length} rundor – Totala straffpoäng: ${totalPoints} · Snittavstånd: ${avgDist} km`;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+  }
+
+const CITY_LABELS = {
+  stockholm: "Stockholm",
+  goteborg: "Göteborg",
+  malmo: "Malmö"
+};
+</script>
+</body>
+</html>
