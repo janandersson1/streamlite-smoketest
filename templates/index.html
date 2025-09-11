@@ -1,1 +1,331 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Geoguessr - The Nabo Way</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 
+<link rel="preload" href="/static/fonts/NeoSansPro-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face{
+  font-family: "NeoSansPro";
+  src: url("/static/fonts/NeoSansPro-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+</style>
+    :root{
+      --brand-600: #5e725e;
+      --brand-700: #4d6151; /* Nabo-grön */
+      --brand-800: #3e4f42;
+      --beige:     #f3efe5;
+      --txt-muted: #cfd5c8;
+      --font-body: Calibri,'Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+      --radius: 12px;
+    }
+
+    /* NeoSansPro för rubriker */
+    @font-face{
+      font-family: "NeoSansPro";
+      src: url("fonts/NeoSansPro-Regular.woff2") format("woff2");
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
+
+    html, body, #app { height: 100%; margin: 0; }
+    body { font-family: var(--font-body); background: var(--beige); }
+
+    /* Layout desktop */
+    #app { display: grid; grid-template-columns: minmax(0,1fr) 520px; grid-template-rows: auto 1fr; }
+
+    header{ grid-column:1/3; display:flex; justify-content:space-between; align-items:center;
+      padding:10px 14px; background: var(--brand-700); color: var(--beige); font-family:"NeoSansPro",var(--font-body); }
+    #map{ height: calc(100dvh - 52px); }
+    .panel{ background: var(--brand-700); color: var(--beige); height: calc(100dvh - 52px); overflow:auto; }
+    .box{ padding:14px 16px; border-bottom: 1px solid rgba(255,255,255,.1); }
+    .hint{ color: var(--txt-muted); }
+    .float-info{
+      position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+      background: var(--brand-700); color: var(--beige); padding: 12px 16px; border-radius: 10px;
+      z-index: 5000; max-width: 92vw;
+    }
+    .toolbar{ display:flex; gap:10px; justify-content:center; margin-top:8px; }
+    .toolbar button{
+      background: transparent; border:1px solid rgba(255,255,255,.5); color: var(--beige);
+      padding:10px 14px; border-radius:8px; cursor:pointer; min-height:44px;
+    }
+
+    /* Overlay */
+    .overlay{ position: fixed; inset:0; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,.9); z-index: 6000; }
+    .card{
+      background: var(--brand-700);
+      color: var(--beige);
+      width: min(92vw, 880px);
+      padding: clamp(24px,4.8vw,56px);
+      border-radius: 16px;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    .brand-title{
+      font-family:"NeoSansPro",var(--font-body);
+      font-weight:600;
+      font-size: clamp(28px, 4.2vw, 44px);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      margin: 0 0 clamp(18px,2.6vw,28px);
+    }
+    .subtitle{
+      font-family:"NeoSansPro",var(--font-body);
+      font-weight:600;
+      text-transform: uppercase;
+      font-size: clamp(18px,2.6vw,24px);
+      border-bottom: 2px solid rgba(255,255,255,.25);
+      display:inline-block;
+      padding-bottom:.25rem;
+      margin: 0 0 clamp(20px,2.6vw,32px);
+    }
+
+    /* Stadskort */
+    .city-grid{
+      display:grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: clamp(14px,2.6vw,32px);
+      justify-items:center;
+      margin: 0 0 clamp(24px,3vw,40px);
+    }
+    @media (max-width: 900px){ .city-grid{ grid-template-columns: repeat(2,1fr);} }
+    @media (max-width: 560px){ .city-grid{ grid-template-columns: 1fr;} }
+
+    .city-card{
+      width:min(260px,84vw);
+      background: rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:18px;
+      padding:18px 16px 20px;
+      display:flex; flex-direction:column; align-items:center; gap:10px;
+      cursor:pointer;
+      transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .city-card:hover,.city-card:focus-visible{
+      transform:translateY(-2px);
+      background:rgba(255,255,255,.12);
+      box-shadow:0 10px 26px rgba(0,0,0,.18);
+      outline:none;
+    }
+    .city-logo{
+      height:150px; width:auto; object-fit:contain;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,.22));
+    }
+    .city-name{
+      font-weight:600;
+      font-size: clamp(15px,2.6vw,18px);
+      font-family: var(--font-body);
+      margin-top:6px;
+    }
+
+    /* Regler */
+    .rules{ margin-top: clamp(12px,2.2vw,24px);}
+    .rules .lead{
+      font-family:"NeoSansPro",var(--font-body);
+      font-weight:600;
+      font-size: clamp(16px,2.4vw,18px);
+      margin: 0 0 10px;
+    }
+    .rules ul{ list-style:none; padding:0; margin:0;}
+    .rules li{ font-size: clamp(15px,2.4vw,17px); margin:6px 0; opacity:.92;}
+    .rules li::before{ content:"• "; color:#cfe3d9; }
+
+    /* Tabeller */
+    .table-wrap{ width:100%; overflow:auto; -webkit-overflow-scrolling: touch; }
+    table{ width:100%; border-collapse: collapse; color: var(--beige); min-width: 560px; }
+    th,td{ border-bottom:1px solid rgba(255,255,255,.1); padding:6px; text-align:left; }
+    th{ background: var(--brand-800); }
+
+    /* Leaflet pins */
+    .nabo-pin{ display:grid; place-items:center;
+      width:30px; height:30px; border-radius:50%;
+      background:var(--brand-800); color:white;
+      border:2px solid #2c3b31; box-shadow:0 2px 6px rgba(0,0,0,.35);
+      transform:translate(-15px,-15px);
+      font-size:18px; line-height:1; user-select:none;}
+    .nabo-pin svg{ width:16px; height:16px; fill:#fff; }
+
+    header nav button{ background:transparent; border:0; color:var(--beige); padding:8px 12px; border-radius:8px; min-height:40px; }
+    header nav button.active{ background: rgba(255,255,255,.1); }
+
+    /* Mobilanpassning */
+    @media (max-width: 900px){
+      #app{ grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
+      #map{ height: 58svh; }
+      .panel{ height:auto;}
+      .float-info{ position: static; transform:none; margin:10px auto 12px;}
+      .toolbar{ gap:12px;}
+      .toolbar button{ padding:12px 16px;}
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>Geoguessr - The Nabo Way</div>
+    <nav>
+      <button id="tabPlay" class="active">Spela</button>
+      <button id="tabBoard">Leaderboard</button>
+    </nav>
+  </header>
+
+  <div id="playCol">
+    <div id="map"></div>
+    <div class="float-info">
+      <div id="place">Ledtråd: –</div>
+      <div class="toolbar">
+        <button id="btnNext">Ny plats</button>
+        <button id="btnEnd">Avsluta & spara resultat</button>
+      </div>
+      <div id="info" class="hint">Välj stad för att börja.</div>
+    </div>
+  </div>
+
+  <aside class="panel" id="sideCol">
+    <div class="box">
+      <div><strong>Rundor</strong></div>
+      <div class="hint">Klicka på kartan för att lägga en gissning. Efter varje gissning läggs en rad här.</div>
+    </div>
+    <div class="box">
+      <div class="table-wrap">
+        <table id="roundsTable">
+          <thead>
+            <tr>
+              <th>#</th><th>Ledtråd</th><th>Stad</th><th>Avstånd</th><th>Felmarginal</th><th>Straffpoäng</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="sum" id="summary">0 rundor – Totala straffpoäng: 0 · Snittavstånd: 0 km</div>
+    </div>
+    <div class="box" id="boardBox" style="display:none;">
+      <div><strong id="boardTitle">Leaderboard (server)</strong></div>
+      <div class="hint">Toppresultat sparas i databasen.</div>
+      <div class="table-wrap">
+        <table id="boardTable">
+          <thead><tr><th>#</th><th>Namn</th><th>Straffpoäng</th><th>Rundor</th><th>Stad</th><th>Datum</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Overlay -->
+<div class="overlay" id="overlay">
+  <div class="card">
+    <div class="brand-title">GEOGUESSR - THE NABO WAY</div>
+    <h1 class="subtitle">VÄLJ STAD</h1>
+
+    <section class="city-grid">
+      <div class="city-card" role="button" tabindex="0" aria-label="Stockholm" data-city="stockholm">
+	<img class="city-logo" src="/static/img/stockholm.png" alt="Stockholm">
+        <span class="city-name">Stockholm</span>
+      </div>
+      <div class="city-card" role="button" tabindex="0" aria-label="Göteborg" data-city="goteborg">
+	<img class="city-logo" src="/static/img/goteborg.png"  alt="Göteborg">
+        <span class="city-name">Göteborg</span>
+      </div>
+      <div class="city-card" role="button" tabindex="0" aria-label="Malmö" data-city="malmo">
+	<img class="city-logo" src="/static/img/malmo.png"     alt="Malmö">
+        <span class="city-name">Malmö</span>
+      </div>
+    </section>
+
+    <section class="rules">
+      <p class="lead">Reglerna är enkla</p>
+      <ul>
+        <li>Se ledtråden</li>
+        <li>Placera ut fastigheten på kartan</li>
+        <li>Bäst av 5</li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // ======= spelparametrar =======
+  const ROUNDS_TOTAL = 5;
+  let selectedCity = null;
+  let cityCenters = {};
+  let place = null;
+  let guessMarker = null, trueMarker = null, line = null;
+  let locked = true;
+
+  const naboGreen = "#4d6151";
+
+  function makeArrowIcon(deg=0){
+    const html = '<div class="nabo-pin"><svg style="transform: rotate(' + deg + 'deg)" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l5.5 9h-4v9h-3v-9h-4L12 3z"/></svg></div>';
+    return L.divIcon({className: "", html, iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-15]});
+  }
+  function makeCheckIcon(){
+    const html = '<div class="nabo-pin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.2l-3.5-3.5-1.4 1.4L9 19 20.3 7.7l-1.4-1.4z"/></svg></div>';
+    return L.divIcon({className: "", html, iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-15]});
+  }
+  function bearingDeg(lat1, lon1, lat2, lon2){
+    const toRad = x => x * Math.PI / 180, toDeg = x => x * 180 / Math.PI;
+    const φ1 = toRad(lat1), φ2 = toRad(lat2), Δλ = toRad(lon2-lon1);
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+    return (toDeg(Math.atan2(y,x)) + 360) % 360;
+  }
+  function escapeHtml(s){ return String(s).replace(/[&<>\"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function setLocked(flag){ locked = flag; if(flag) map.off('click', onMapClick); else map.on('click', onMapClick); }
+
+  const map = L.map('map').setView([62.0, 15.0], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  map.on('click', onMapClick);
+
+  fetch('/api/cities').then(r=>r.json()).then(j=>{
+    j.cities.forEach(c => { cityCenters[c.key] = c.center; });
+  });
+
+  document.querySelectorAll('.overlay .city-card').forEach(card=>{
+    function choose(){
+      selectedCity = card.getAttribute('data-city');
+      const center = cityCenters[selectedCity] || defaultCenter(selectedCity);
+      map.setView(center, 11);
+      document.getElementById('overlay').style.display = 'none';
+      document.getElementById('info').textContent = 'Klicka på kartan för att gissa.';
+      resetRounds();
+      newRound();
+    }
+    card.addEventListener('click', choose);
+    card.addEventListener('keydown', e=>{
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); }
+    });
+  });
+
+  document.getElementById('tabPlay').addEventListener('click', ()=>{
+    document.getElementById('tabPlay').classList.add('active');
+    document.getElementById('tabBoard').classList.remove('active');
+    document.getElementById('playCol').style.display = '';
+    document.getElementById('boardBox').style.display = 'none';
+  });
+  document.getElementById('tabBoard').addEventListener('click', async ()=>{
+    document.getElementById('tabBoard').classList.add('active');
+    document.getElementById('tabPlay').classList.remove('active');
+    document.getElementById('playCol').style.display = 'none';
+    document.getElementById('boardBox').style.display = '';
+    await refreshLeaderboard();
+  });
+
+  function defaultCenter(k){
+    if (k === 'stockholm') return [59.334, 18.063];
+    if (k === 'goteborg')  return [57.707, 11.967];
+    if (k === 'malmo')     return [55.605, 13.003];
+    return [62, 15];
+  }
+
+  document.getElementById('btnNext').addEventListener('click',
