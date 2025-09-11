@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import csv, os, re, random, datetime, threading, sqlite3
 from math import radians, sin, cos, asin, sqrt
 from pathlib import Path
@@ -11,15 +12,15 @@ from pydantic import BaseModel, constr, conint
 APP_DIR = Path(__file__).parent
 
 # =========================================================
-# 1) Skapa appen FÖRST
+# 1) Skapa appen
 # =========================================================
 app = FastAPI(title="Geoguessr - The Nabo Way")
 
 # =========================================================
-# 2) DB environment detect + diagnosendpoints
+# 2) DB-env upptäckt + diagnos
 # =========================================================
 DB_URL = os.getenv("DATABASE_URL", "").strip()
-USE_PG = DB_URL != ""
+USE_PG = DB_URL != ""  # True när Postgres är konfigurerad
 
 def _mask(url: str) -> str:
     return re.sub(r'://[^@]+@', '://***:***@', url) if url else ""
@@ -33,20 +34,19 @@ def debug_env():
     return {"DATABASE_URL_present": bool(DB_URL), "preview": _mask(DB_URL)}
 
 # =========================================================
-# 3) Leaderboard – Postgres i produktion, SQLite lokalt
+# 3) Leaderboard – Postgres i prod, SQLite lokalt
 # =========================================================
 _db_lock = threading.Lock()
-DB_PATH = str(APP_DIR / "leaderboard.sqlite3")  # fallback för lokal körning
+DB_PATH = str(APP_DIR / "leaderboard.sqlite3")  # fallback
 
 if USE_PG:
-    # --- psycopg v3 (ersätter psycopg2) ---
+    # psycopg v3 (fungerar på Python 3.13)
     import psycopg
     from psycopg.rows import dict_row
 
     def _pg_exec(sql: str, args: tuple = ()):
         with _db_lock:
-            # DB_URL innehåller redan sslmode=require från Render
-            with psycopg.connect(DB_URL) as conn:
+            with psycopg.connect(DB_URL) as conn:  # DB_URL har sslmode=require via Render
                 with conn.cursor() as cur:
                     cur.execute(sql, args)
                 conn.commit()
@@ -54,7 +54,6 @@ if USE_PG:
     def _pg_query(sql: str, args: tuple = ()):
         with _db_lock:
             with psycopg.connect(DB_URL) as conn:
-                # dict_row => returnera dictar istället för tuples
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute(sql, args)
                     return cur.fetchall()
@@ -70,11 +69,10 @@ if USE_PG:
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """)
-
     _ensure_table()
 
-
 else:
+    # SQLite fallback (för lokal utveckling)
     def _sq_exec(sql: str, args: tuple = ()):
         with _db_lock:
             with sqlite3.connect(DB_PATH) as conn:
@@ -147,7 +145,7 @@ def api_leaderboard_get(limit: int = 50, order: str = "best"):
     return {"items": rows, "order": order}
 
 # =========================================================
-# 4) Städer & CSV-laddning (som du hade)
+# 4) Städer & CSV-laddning
 # =========================================================
 def norm_city(s: str) -> str:
     s = (s or "").lower()
@@ -222,7 +220,7 @@ def load_city(city: str) -> None:
     PLACES[city] = rows
 
 # =========================================================
-# 5) Geo & poäng (som du hade)
+# 5) Geo & poäng
 # =========================================================
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0088
@@ -233,10 +231,10 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * asin(sqrt(a))
 
 def distance_score_km(distance_km: float) -> int:
-    return int(round(distance_km * 100))  # 1.2 km -> 120 p
+    return int(round(distance_km * 100))  # 1.2 km -> 120 p (lägre är bättre)
 
 # =========================================================
-# 6) API (oförändrat för spelet)
+# 6) API (spel)
 # =========================================================
 @app.get("/api/cities")
 def api_cities():
