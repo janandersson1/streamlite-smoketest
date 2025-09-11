@@ -5,19 +5,35 @@ from math import radians, sin, cos, asin, sqrt
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, constr, conint
 
-APP_DIR = Path(__file__).parent
+# =========================================================
+# Paths & app
+# =========================================================
+APP_DIR = Path(__file__).parent.resolve()
+STATIC_DIR = APP_DIR / "static"
+TEMPLATES_DIR = APP_DIR / "templates"
 
-# =========================================================
-# 1) Skapa appen
-# =========================================================
 app = FastAPI(title="Geoguessr - The Nabo Way")
 
+# Skapa mappar lokalt om de saknas (ofarligt i prod)
+STATIC_DIR.mkdir(exist_ok=True)
+(STATIC_DIR / "img").mkdir(parents=True, exist_ok=True)
+(STATIC_DIR / "fonts").mkdir(parents=True, exist_ok=True)
+TEMPLATES_DIR.mkdir(exist_ok=True)
+
+# Serva /static -> ./static
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Jinja2 templates -> ./templates
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
 # =========================================================
-# 2) DB-env upptäckt + diagnos
+# Hälso-/debug-endpoints
 # =========================================================
 DB_URL = os.getenv("DATABASE_URL", "").strip()
 USE_PG = DB_URL != ""  # True när Postgres är konfigurerad
@@ -33,20 +49,29 @@ def healthz():
 def debug_env():
     return {"DATABASE_URL_present": bool(DB_URL), "preview": _mask(DB_URL)}
 
+@app.get("/debug/static")
+def debug_static():
+    return {
+        "cwd": str(Path().resolve()),
+        "static_dir": str(STATIC_DIR.resolve()),
+        "templates_dir": str(TEMPLATES_DIR.resolve()),
+        "has_stockholm": (STATIC_DIR / "img" / "stockholm.png").exists(),
+        "has_font": (STATIC_DIR / "fonts" / "NeoSansPro-Regular.woff2").exists(),
+    }
+
 # =========================================================
-# 3) Leaderboard – Postgres i prod, SQLite lokalt
+# Leaderboard – Postgres i prod, SQLite lokalt
 # =========================================================
 _db_lock = threading.Lock()
 DB_PATH = str(APP_DIR / "leaderboard.sqlite3")  # fallback
 
 if USE_PG:
-    # psycopg v3 (fungerar på Python 3.13)
     import psycopg
     from psycopg.rows import dict_row
 
     def _pg_exec(sql: str, args: tuple = ()):
         with _db_lock:
-            with psycopg.connect(DB_URL) as conn:  # DB_URL har sslmode=require via Render
+            with psycopg.connect(DB_URL) as conn:
                 with conn.cursor() as cur:
                     cur.execute(sql, args)
                 conn.commit()
@@ -72,7 +97,6 @@ if USE_PG:
     _ensure_table()
 
 else:
-    # SQLite fallback (för lokal utveckling)
     def _sq_exec(sql: str, args: tuple = ()):
         with _db_lock:
             with sqlite3.connect(DB_PATH) as conn:
@@ -145,7 +169,7 @@ def api_leaderboard_get(limit: int = 50, order: str = "best"):
     return {"items": rows, "order": order}
 
 # =========================================================
-# 4) Städer & CSV-laddning
+# Städer & CSV-laddning
 # =========================================================
 def norm_city(s: str) -> str:
     s = (s or "").lower()
@@ -220,7 +244,7 @@ def load_city(city: str) -> None:
     PLACES[city] = rows
 
 # =========================================================
-# 5) Geo & poäng
+# Geo & poäng
 # =========================================================
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0088
@@ -234,7 +258,7 @@ def distance_score_km(distance_km: float) -> int:
     return int(round(distance_km * 100))  # 1.2 km -> 120 p (lägre är bättre)
 
 # =========================================================
-# 6) API (spel)
+# API (spel)
 # =========================================================
 @app.get("/api/cities")
 def api_cities():
@@ -278,9 +302,8 @@ def api_guess_map(city: str = Query(..., description="stockholm | goteborg | mal
             "solution": {"lat": row["lat"], "lon": row["lon"]}}
 
 # =========================================================
-# 7) Frontend: servera index.html
+# Frontend: rendera index.html via templates/
 # =========================================================
 @app.get("/", response_class=HTMLResponse)
-def index():
-    html_path = APP_DIR / "index.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
