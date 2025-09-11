@@ -39,19 +39,23 @@ _db_lock = threading.Lock()
 DB_PATH = str(APP_DIR / "leaderboard.sqlite3")  # fallback för lokal körning
 
 if USE_PG:
-    import psycopg2, psycopg2.extras
+    # --- psycopg v3 (ersätter psycopg2) ---
+    import psycopg
+    from psycopg.rows import dict_row
 
     def _pg_exec(sql: str, args: tuple = ()):
         with _db_lock:
-            with psycopg2.connect(DB_URL, sslmode="require") as conn:
+            # DB_URL innehåller redan sslmode=require från Render
+            with psycopg.connect(DB_URL) as conn:
                 with conn.cursor() as cur:
                     cur.execute(sql, args)
                 conn.commit()
 
     def _pg_query(sql: str, args: tuple = ()):
         with _db_lock:
-            with psycopg2.connect(DB_URL, sslmode="require") as conn:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            with psycopg.connect(DB_URL) as conn:
+                # dict_row => returnera dictar istället för tuples
+                with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute(sql, args)
                     return cur.fetchall()
 
@@ -66,7 +70,9 @@ if USE_PG:
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """)
+
     _ensure_table()
+
 
 else:
     def _sq_exec(sql: str, args: tuple = ()):
