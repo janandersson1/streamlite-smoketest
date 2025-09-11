@@ -8,6 +8,26 @@ from typing import Dict, List, Tuple
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+# === DB environment detect (diagnostik) ===
+import os, re
+DB_URL = os.getenv("DATABASE_URL", "").strip()
+USE_PG = DB_URL != ""   # True om Postgres-url finns
+
+def _mask(url: str) -> str:
+    # maskar användare/lösen när vi visar url i debug
+    return re.sub(r'://[^@]+@', '://***:***@', url) if url else ""
+
+@app.get("/healthz")
+def healthz():
+    # visar vilken DB appen kommer använda
+    return {"status": "ok", "db": "postgres" if USE_PG else "sqlite"}
+
+@app.get("/debug_env")
+def debug_env():
+    # kolla att env-variabeln verkligen finns i processen
+    return {"DATABASE_URL_present": bool(DB_URL), "preview": _mask(DB_URL)}
+
+
 APP_DIR = Path(__file__).parent
 
 app = FastAPI(title="Geoguessr - The Nabo Way")
