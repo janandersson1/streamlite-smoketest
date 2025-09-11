@@ -1,6 +1,5 @@
 from __future__ import annotations
-import csv
-import random
+import csv, os, re, random
 from math import radians, sin, cos, asin, sqrt
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -8,8 +7,12 @@ from typing import Dict, List, Tuple
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+APP_DIR = Path(__file__).parent
+
+# === Skapa appen FÖRST ===
+app = FastAPI(title="Geoguessr - The Nabo Way")
+
 # === DB environment detect (diagnostik) ===
-import os, re
 DB_URL = os.getenv("DATABASE_URL", "").strip()
 USE_PG = DB_URL != ""   # True om Postgres-url finns
 
@@ -26,11 +29,6 @@ def healthz():
 def debug_env():
     # kolla att env-variabeln verkligen finns i processen
     return {"DATABASE_URL_present": bool(DB_URL), "preview": _mask(DB_URL)}
-
-
-APP_DIR = Path(__file__).parent
-
-app = FastAPI(title="Geoguessr - The Nabo Way")
 
 # ---------- Städer & filer ----------
 def norm_city(s: str) -> str:
@@ -58,7 +56,6 @@ REQUIRED = [
 # In-memory cache
 PLACES: Dict[str, List[Dict]] = {}             # city -> list of places
 PLACE_INDEX: Dict[Tuple[str, int], Dict] = {}  # (city, id) -> place row
-
 
 def load_city(city: str) -> None:
     """Läs in stadens CSV till minnet (en gång)."""
@@ -110,7 +107,6 @@ def load_city(city: str) -> None:
 
     PLACES[city] = rows
 
-
 # ---------- Geo & Poäng ----------
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0088
@@ -123,7 +119,6 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def distance_score_km(distance_km: float) -> int:
     # Straffpoäng: 1.2 km -> 120 p
     return int(round(distance_km * 100))
-
 
 # ---------- API ----------
 @app.get("/api/cities")
@@ -158,35 +153,22 @@ def api_guess_map(
     """Beräkna avstånd + straffpoäng för gissning."""
     c = norm_city(city)
     load_city(c)
-
     try:
         pid = int(payload.get("place_id"))
         glat = float(payload.get("lat"))
         glon = float(payload.get("lon"))
     except Exception:
         raise HTTPException(400, detail="place_id, lat, lon måste finnas och vara numeriska")
-
-
     row = PLACE_INDEX.get((c, pid))
     if not row:
         raise HTTPException(400, detail="Ogiltigt place_id för staden")
-
-
     d_km = haversine_km(glat, glon, row["lat"], row["lon"])
     score = distance_score_km(d_km)
-    return {
-        "distance_km": round(d_km, 3),
-        "score": score,
-        "solution": {"lat": row["lat"], "lon": row["lon"]},
-    }
+    return {"distance_km": round(d_km, 3), "score": score,
+            "solution": {"lat": row["lat"], "lon": row["lon"]}}
 
-
-# ---------- Frontend & hälsa ----------
+# ---------- Frontend ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
     html_path = APP_DIR / "index.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
-
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
