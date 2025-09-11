@@ -12,51 +12,48 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, constr, conint
 
 # =========================================================
+# DB settings (env variabel)
+# =========================================================
+DB_URL = os.getenv("DATABASE_URL", "").strip()
+USE_PG = DB_URL != ""  # True = Postgres, False = SQLite
+
+# =========================================================
 # Paths & app
 # =========================================================
 APP_DIR = Path(__file__).parent.resolve()
+
 STATIC_DIR = APP_DIR / "static"
+IMG_DIR = APP_DIR / "img"             # fallback: om bilder ligger här
 TEMPLATES_DIR = APP_DIR / "templates"
 
 app = FastAPI(title="Geoguessr - The Nabo Way")
 
-# Skapa mappar lokalt om de saknas (ofarligt i prod)
+# Skapa mappar lokalt om de saknas
 STATIC_DIR.mkdir(exist_ok=True)
 (STATIC_DIR / "img").mkdir(parents=True, exist_ok=True)
 (STATIC_DIR / "fonts").mkdir(parents=True, exist_ok=True)
+IMG_DIR.mkdir(exist_ok=True)  # fallback
 TEMPLATES_DIR.mkdir(exist_ok=True)
 
-# Serva /static -> ./static
+# Mounta /static (primärt)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Jinja2 templates -> ./templates
+# Mounta även /img → ./img (fallback för dina gamla filer)
+app.mount("/img", StaticFiles(directory=str(IMG_DIR)), name="img")
+
+# Jinja2 templates
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# =========================================================
-# Hälso-/debug-endpoints
-# =========================================================
-DB_URL = os.getenv("DATABASE_URL", "").strip()
-USE_PG = DB_URL != ""  # True när Postgres är konfigurerad
-
-def _mask(url: str) -> str:
-    return re.sub(r'://[^@]+@', '://***:***@', url) if url else ""
-
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok", "db": "postgres" if USE_PG else "sqlite"}
-
-@app.get("/debug_env")
-def debug_env():
-    return {"DATABASE_URL_present": bool(DB_URL), "preview": _mask(DB_URL)}
-
+# Debug endpoint för att kolla mapparna
 @app.get("/debug/static")
 def debug_static():
     return {
-        "cwd": str(Path().resolve()),
+        "cwd": str(APP_DIR),
         "static_dir": str(STATIC_DIR.resolve()),
+        "img_dir": str(IMG_DIR.resolve()),
         "templates_dir": str(TEMPLATES_DIR.resolve()),
-        "has_stockholm": (STATIC_DIR / "img" / "stockholm.png").exists(),
-        "has_font": (STATIC_DIR / "fonts" / "NeoSansPro-Regular.woff2").exists(),
+        "has_stockholm_static": (STATIC_DIR / "img" / "stockholm.png").exists(),
+        "has_stockholm_img": (IMG_DIR / "stockholm.png").exists(),
     }
 
 # =========================================================
