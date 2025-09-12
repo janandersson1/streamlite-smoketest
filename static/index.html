@@ -243,7 +243,7 @@ table{
 
     <!-- Leaderboard -->
 <div class="box" id="boardBox" style="display:none;">
-  <div><strong id="boardTitle">Leaderboard (server)</strong></div>
+  <div><strong id="boardTitle">Leaderboard</strong></div>
   <div class="hint">Toppresultat sparas i databasen.</div>
   <div class="table-wrap">
     <table id="boardTable">
@@ -573,9 +573,17 @@ async function refreshLeaderboard(){
   }
 }
 
-function capitalize(s){
-  if (!s) return '';
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function cap(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+
+function formatSv(dtStr){
+  const d = new Date(dtStr);
+  return isNaN(d)
+    ? (dtStr || '')
+    : d.toLocaleString('sv-SE', {
+        timeZone: 'Europe/Stockholm',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+      });
 }
 
 
@@ -618,6 +626,11 @@ async function endGame(){
     if (info) info.textContent = 'Spelet slut – resultat sparat.';
   }
 }
+
+// Körs en gång när sidan laddas
+document.getElementById('tabBoard')
+  ?.addEventListener('click', refreshLeaderboard);
+
 
 
   // ======= Tabs (EN källa till sanning) =======
