@@ -104,6 +104,8 @@ try:
 except Exception:
     USE_PG = False
 
+SQLITE_PATH = APP_DIR / "app.db"
+
 def _connect():
     if USE_PG:
         return psycopg.connect(DB_URL, autocommit=True)
@@ -123,33 +125,30 @@ def _exec(sql: str, params: tuple = ()):
         except Exception:
             return []
 
-# =========================================================
-# Skapa feedback-tabell
-# =========================================================
-if USE_PG:
-    _exec("""
-    CREATE TABLE IF NOT EXISTS feedback (
-      id          BIGSERIAL PRIMARY KEY,
-      created_at  TIMESTAMPTZ NOT NULL,
-      name        TEXT,
-      email       TEXT,
-      category    TEXT,
-      message     TEXT NOT NULL
-    )
-    """)
-else:
-    _exec("""
-    CREATE TABLE IF NOT EXISTS feedback (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at  TEXT NOT NULL,
-      name        TEXT,
-      email       TEXT,
-      category    TEXT,
-      message     TEXT NOT NULL
-    )
-    """)
 
-# ==================== Leaderboard table ====================
+# ========= Feedback table =========
+if USE_PG:
+    _exec("""
+    CREATE TABLE IF NOT EXISTS feedback (
+      id          BIGSERIAL PRIMARY KEY,
+      created_at  TIMESTAMPTZ NOT NULL,
+      name        TEXT,
+      email       TEXT,
+      category    TEXT,
+      message     TEXT NOT NULL
+    )""")
+else:
+    _exec("""
+    CREATE TABLE IF NOT EXISTS feedback (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at  TEXT NOT NULL,
+      name        TEXT,
+      email       TEXT,
+      category    TEXT,
+      message     TEXT NOT NULL
+    )""")
+
+# ========= Leaderboard table =========
 if USE_PG:
     _exec("""
     CREATE TABLE IF NOT EXISTS leaderboard (
@@ -159,8 +158,7 @@ if USE_PG:
       score       INTEGER NOT NULL,     -- lägre = bättre
       rounds      INTEGER NOT NULL,
       city        TEXT
-    );
-    """)
+    )""")
 else:
     _exec("""
     CREATE TABLE IF NOT EXISTS leaderboard (
@@ -170,8 +168,8 @@ else:
       score       INTEGER NOT NULL,     -- lägre = bättre
       rounds      INTEGER NOT NULL,
       city        TEXT
-    );
-    """)
+    )""")
+
 
 
 # =========================================================
@@ -183,23 +181,20 @@ class Feedback(BaseModel):
     category: str = "Feedback"
     message: str
 
-# =========================================================
-# Endpoints
-# =========================================================
 @app.post("/api/feedback")
-async def save_feedback(fb: Feedback, request: Request):
+async def save_feedback(fb: Feedback):
     msg = (fb.message or "").strip()
     if not msg:
         raise HTTPException(status_code=400, detail="Tomt meddelande")
-
     ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
-
-    sql_sqlite = "INSERT INTO feedback (created_at, name, email, category, message) VALUES (?, ?, ?, ?, ?)"
-    sql_pg = "INSERT INTO feedback (created_at, name, email, category, message) VALUES ($1, $2, $3, $4, $5)"
-    _exec(sql_sqlite if not USE_PG else sql_pg,
-          (ts, (fb.name or "").strip(), (fb.email or "").strip(), (fb.category or "Feedback").strip(), msg))
-
+    _exec(
+        "INSERT INTO feedback (created_at,name,email,category,message) VALUES (?, ?, ?, ?, ?)"
+        if not USE_PG else
+        "INSERT INTO feedback (created_at,name,email,category,message) VALUES ($1,$2,$3,$4,$5)",
+        (ts, (fb.name or "").strip(), (fb.email or "").strip(), (fb.category or "Feedback").strip(), msg)
+    )
     return {"ok": True}
+
 
 @app.get("/api/feedbacks")
 def list_feedbacks():
@@ -241,7 +236,7 @@ CITY_CENTERS = {
     "malmo":     (55.605, 13.003),
 }
 
-from pydantic import BaseModel, conint
+from pydantic import conint
 
 class ScoreIn(BaseModel):
     name: str
@@ -252,24 +247,18 @@ class ScoreIn(BaseModel):
 @app.post("/api/leaderboard")
 def save_score(s: ScoreIn):
     ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
-    sql_sqlite = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES (?, ?, ?, ?, ?)"
-    sql_pg     = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES ($1, $2, $3, $4, $5)"
-    _exec(sql_sqlite if not USE_PG else sql_pg,
-          (ts, s.name.strip() or "Anon", int(s.score), int(s.rounds), (s.city or "").strip()))
+    _exec(
+        "INSERT INTO leaderboard (created_at,name,score,rounds,city) VALUES (?, ?, ?, ?, ?)"
+        if not USE_PG else
+        "INSERT INTO leaderboard (created_at,name,score,rounds,city) VALUES ($1,$2,$3,$4,$5)",
+        (ts, s.name.strip() or "Anon", int(s.score), int(s.rounds), (s.city or "").strip())
+    )
     return {"ok": True}
 
 @app.get("/api/leaderboard")
 def list_scores(limit: int = 50, order: str = "best"):
-    """
-    order=best  -> score ASC (lägst först)
-    order=latest-> created_at DESC
-    """
     limit = max(1, min(200, int(limit or 50)))
-    if order == "latest":
-        order_clause = "ORDER BY created_at DESC"
-    else:
-        order_clause = "ORDER BY score ASC, created_at ASC"
-
+    order_clause = "ORDER BY score ASC, created_at ASC" if order != "latest" else "ORDER BY created_at DESC"
     rows = _exec(f"SELECT id, created_at, name, score, rounds, city FROM leaderboard {order_clause} LIMIT {limit}")
     items = []
     if USE_PG:
@@ -279,6 +268,7 @@ def list_scores(limit: int = 50, order: str = "best"):
         for r in rows:
             items.append(dict(r))
     return {"items": items}
+
 
 
 # minneskarta: place_id -> {lat,lon,display_name,city}
