@@ -254,6 +254,146 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+  // --- state för ronder ---
+  let roundNo = 0;
+  const rounds = [];
+
+  function resetRounds(){
+    roundNo = 0;
+    rounds.length = 0;
+    clearMapGraphics();
+    const tbody = document.querySelector('#roundsTable tbody');
+    if (tbody) tbody.innerHTML = '';
+    updateSummary();
+  }
+
+  function clearMapGraphics(){
+    if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
+    if (trueMarker)  { map.removeLayer(trueMarker);  trueMarker  = null; }
+    if (line)        { map.removeLayer(line);        line        = null; }
+  }
+
+  function updateSummary(){
+    const sumEl = document.getElementById('summary');
+    if (!sumEl) return;
+    if (!rounds.length) { sumEl.textContent = '0 rundor – Totala straffpoäng: 0 · Snittavstånd: 0 km'; return; }
+    const tot = rounds.reduce((a,r)=>a + (r.score||0), 0);
+    const avg = rounds.reduce((a,r)=>a + (r.distance_km||0), 0) / rounds.length;
+    sumEl.textContent = `${rounds.length} runder – Totala straffpoäng: ${tot} · Snittavstånd: ${avg.toFixed(1)} km`;
+  }
+
+  // --- hämta ny ledtråd ---
+  async function newRound(){
+    if (!selectedCity){ alert('Välj stad först.'); return; }
+    clearMapGraphics();
+    setLocked(false);
+    try{
+      const res = await fetch(`/api/round?city=${encodeURIComponent(selectedCity)}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      place = data.place; // { id, display_name, street, postnummer, ort, kommun, lan, lat, lon }
+      roundNo += 1;
+
+      // visa ledtråd
+      const info = document.getElementById('info');
+      if (info){
+        const ledtrad = place.display_name || [place.street, place.postnummer, place.ort].filter(Boolean).join(', ');
+        info.textContent = `Ledtråd ${roundNo}/${ROUNDS_TOTAL}: ${ledtrad}`;
+      }
+    }catch(err){
+      console.error('newRound error', err);
+      alert('Kunde inte hämta ledtråd. Se konsolen.');
+    }
+  }
+
+  // --- klick på kartan = gissning ---
+  async function onMapClick(e){
+    if (locked || !place) return;
+    setLocked(true); // lås tills svar kommer
+
+    const lat = e.latlng.lat;
+    const lon = e.latlng.lng;
+
+    try{
+      const res = await fetch(`/api/guess/map?city=${encodeURIComponent(selectedCity)}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ place_id: place.id, lat, lon })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json(); // { distance_km, score, solution:{lat,lon} }
+
+      // rita grafik
+      clearMapGraphics();
+      guessMarker = L.marker([lat, lon], {icon: makeArrowIcon()}).addTo(map);
+      trueMarker  = L.marker([data.solution.lat, data.solution.lon], {icon: makeCheckIcon()}).addTo(map);
+      line = L.polyline([[lat,lon],[data.solution.lat,data.solution.lon]], {color:'#444', weight:2}).addTo(map);
+      map.fitBounds(line.getBounds(), {padding:[30,30]});
+
+      // lägg rad i tabellen
+      const tbody = document.querySelector('#roundsTable tbody');
+      if (tbody){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${roundNo}</td>
+          <td>${escapeHtml(place.display_name || '')}</td>
+          <td>${escapeHtml(selectedCity)}</td>
+          <td>${data.distance_km.toFixed(2)} km</td>
+          <td>${(data.distance_km*1000).toFixed(0)} m</td>
+          <td>${data.score}</td>`;
+        tbody.appendChild(tr);
+      }
+
+      rounds.push({distance_km:data.distance_km, score:data.score});
+      updateSummary();
+
+      // nästa runda eller slut
+      if (roundNo < ROUNDS_TOTAL){
+        setLocked(false);
+        // liten paus så man hinner se resultatet
+        setTimeout(()=>newRound(), 500);
+      }else{
+        if (typeof endGame === 'function') endGame();
+      }
+    }catch(err){
+      console.error('guess error', err);
+      alert('Kunde inte skicka gissning. Se konsolen.');
+      setLocked(false);
+    }
+  }
+
+  // --- leaderboard ---
+  async function refreshLeaderboard(){
+    try{
+      const res = await fetch('/api/leaderboard?limit=50&order=best');
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json(); // { items: [...] }
+      const tbody = document.querySelector('#boardTable tbody');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+      (data.items || []).forEach((row,i)=>{
+        const tr = document.createElement('tr');
+        const d = (row.created_at || '').toString().replace('T',' ').replace('Z','');
+        tr.innerHTML = `
+          <td>${i+1}</td>
+          <td>${escapeHtml(row.name||'')}</td>
+          <td>${row.score}</td>
+          <td>${row.rounds}</td>
+          <td>${escapeHtml(row.city||'')}</td>
+          <td>${escapeHtml(d)}</td>`;
+        tbody.appendChild(tr);
+      });
+    }catch(err){
+      console.error('refreshLeaderboard error', err);
+    }
+  }
+
+  // (valfri) enkel avslut som bara låser spelet
+  function endGame(){
+    setLocked(true);
+    const info = document.getElementById('info');
+    if (info) info.textContent = 'Spelet slut – byt flik eller starta om.';
+  }
   // ======= spelparametrar =======
   const ROUNDS_TOTAL = 5;
   let selectedCity = null;
