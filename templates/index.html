@@ -6,15 +6,10 @@
   <title>Geoguessr - The Nabo Way</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 
-<link rel="preload" href="/static/fonts/NeoSansPro-Regular.woff2" as="font" type="font/woff2" crossorigin>
-<style>
-@font-face{
-  font-family: "NeoSansPro";
-  src: url("/static/fonts/NeoSansPro-Regular.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
+  <!-- Preload NeoSansPro -->
+  <link rel="preload" href="/static/fonts/NeoSansPro-Regular.woff2" as="font" type="font/woff2" crossorigin>
+
+  <style>
     :root{
       --brand-600: #5e725e;
       --brand-700: #4d6151; /* Nabo-grön */
@@ -25,10 +20,9 @@
       --radius: 12px;
     }
 
-    /* NeoSansPro för rubriker */
     @font-face{
       font-family: "NeoSansPro";
-      src: url("fonts/NeoSansPro-Regular.woff2") format("woff2");
+      src: url("/static/fonts/NeoSansPro-Regular.woff2") format("woff2");
       font-weight: 400;
       font-style: normal;
       font-display: swap;
@@ -40,59 +34,93 @@
     /* Layout desktop */
     #app { display: grid; grid-template-columns: minmax(0,1fr) 520px; grid-template-rows: auto 1fr; }
 
-    header{ grid-column:1/3; display:flex; justify-content:space-between; align-items:center;
-      padding:10px 14px; background: var(--brand-700); color: var(--beige); font-family:"NeoSansPro",var(--font-body); }
+    header{
+      grid-column:1/3; display:flex; justify-content:space-between; align-items:center;
+      padding:10px 14px; background: var(--brand-700); color: var(--beige);
+      font-family:"NeoSansPro",var(--font-body);
+    }
+
     #map{ height: calc(100dvh - 52px); }
     .panel{ background: var(--brand-700); color: var(--beige); height: calc(100dvh - 52px); overflow:auto; }
     .box{ padding:14px 16px; border-bottom: 1px solid rgba(255,255,255,.1); }
+    .panel .box + .box{ margin-top: clamp(10px, 2vw, 18px); } /* mer luft mellan sektioner */
     .hint{ color: var(--txt-muted); }
+
+    /* Större & luftigare infobox */
     .float-info{
       position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
-      background: var(--brand-700); color: var(--beige); padding: 12px 16px; border-radius: 10px;
-      z-index: 5000; max-width: 92vw;
+      background: var(--brand-700); color: var(--beige);
+      padding: clamp(16px, 2.8vw, 22px) clamp(16px, 3.2vw, 28px);
+      border-radius: 16px;
+      box-shadow: 0 14px 36px rgba(0,0,0,.28);
+      z-index: 5000; max-width: min(96vw, 940px);
+      display: flex; flex-direction: column;
+      gap: clamp(10px, 2.2vw, 16px); /* luft mellan ledtråd/knappar/info */
     }
-    .toolbar{ display:flex; gap:10px; justify-content:center; margin-top:8px; }
+
+    .clue{
+      font-family: "NeoSansPro", Calibri, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-weight: 700;
+      font-size: clamp(20px, 3vw, 26px);
+      line-height: 1.25;
+    }
+
+    .toolbar{ display:flex; gap: clamp(10px, 2vw, 16px); justify-content:center; margin-top: clamp(6px, 2vw, 12px); }
     .toolbar button{
-      background: transparent; border:1px solid rgba(255,255,255,.5); color: var(--beige);
-      padding:10px 14px; border-radius:8px; cursor:pointer; min-height:44px;
+      background: transparent; border:1px solid rgba(255,255,255,.55); color: var(--beige);
+      padding:12px 18px; border-radius:10px; cursor:pointer; min-height:44px;
     }
 
     /* Overlay */
     .overlay{ position: fixed; inset:0; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,.9); z-index: 6000; }
     .card{
-      background: var(--brand-700);
-      color: var(--beige);
-      width: min(92vw, 880px);
-      padding: clamp(24px,4.8vw,56px);
-      border-radius: 16px;
-      text-align: center;
+      background: var(--brand-700); color: var(--beige); width: min(92vw, 880px);
+      padding: clamp(24px,4.8vw,56px); border-radius: 16px; text-align: center;
       box-shadow: 0 10px 30px rgba(0,0,0,.25);
     }
     .brand-title{
-      font-family:"NeoSansPro",var(--font-body);
-      font-weight:600;
-      font-size: clamp(28px, 4.2vw, 44px);
-      letter-spacing: .06em;
-      text-transform: uppercase;
-      margin: 0 0 clamp(18px,2.6vw,28px);
+      font-family:"NeoSansPro",var(--font-body); font-weight:600; font-size: clamp(28px, 4.2vw, 44px);
+      letter-spacing: .06em; text-transform: uppercase; margin: 0 0 clamp(18px,2.6vw,28px);
     }
     .subtitle{
-      font-family:"NeoSansPro",var(--font-body);
-      font-weight:600;
-      text-transform: uppercase;
-      font-size: clamp(18px,2.6vw,24px);
-      border-bottom: 2px solid rgba(255,255,255,.25);
-      display:inline-block;
-      padding-bottom:.25rem;
-      margin: 0 0 clamp(20px,2.6vw,32px);
+      font-family:"NeoSansPro",var(--font-body); font-weight:600; text-transform: uppercase;
+      font-size: clamp(18px,2.6vw,24px); border-bottom: 2px solid rgba(255,255,255,.25);
+      display:inline-block; padding-bottom:.25rem; margin: 0 0 clamp(20px,2.6vw,32px);
     }
+
+.rules ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  text-align: center;         /* centrera hela raden */
+  display: flex;              /* radlayout */
+  justify-content: center;    /* centrera innehållet */
+  gap: 28px;                  /* jämnt avstånd mellan varje regel-block */
+}
+
+.rules li {
+  position: relative;
+  display: flex;              /* punkt + text i rad */
+  align-items: center;
+  font-size: 1.2em;
+  line-height: 1.4;
+  gap: 8px;                   /* mellanrum mellan punkt och text */
+}
+
+.rules li::before {
+  content: "•";
+  color: var(--beige);        /* samma färg som texten */
+  font-size: 1.4em;           /* lite större punkt */
+  line-height: 1;
+}
+
+
+
 
     /* Stadskort */
     .city-grid{
-      display:grid;
-      grid-template-columns: repeat(3, minmax(0,1fr));
-      gap: clamp(14px,2.6vw,32px);
-      justify-items:center;
+      display:grid; grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: clamp(14px,2.6vw,32px); justify-items:center;
       margin: 0 0 clamp(24px,3vw,40px);
     }
     @media (max-width: 900px){ .city-grid{ grid-template-columns: repeat(2,1fr);} }
@@ -105,8 +133,7 @@
       border-radius:18px;
       padding:18px 16px 20px;
       display:flex; flex-direction:column; align-items:center; gap:10px;
-      cursor:pointer;
-      transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+      cursor:pointer; transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
       -webkit-tap-highlight-color: transparent;
     }
     .city-card:hover,.city-card:focus-visible{
@@ -115,56 +142,93 @@
       box-shadow:0 10px 26px rgba(0,0,0,.18);
       outline:none;
     }
-    .city-logo{
-      height:150px; width:auto; object-fit:contain;
-      filter: drop-shadow(0 2px 4px rgba(0,0,0,.22));
-    }
-    .city-name{
-      font-weight:600;
-      font-size: clamp(15px,2.6vw,18px);
-      font-family: var(--font-body);
-      margin-top:6px;
-    }
-
-    /* Regler */
-    .rules{ margin-top: clamp(12px,2.2vw,24px);}
-    .rules .lead{
-      font-family:"NeoSansPro",var(--font-body);
-      font-weight:600;
-      font-size: clamp(16px,2.4vw,18px);
-      margin: 0 0 10px;
-    }
-    .rules ul{ list-style:none; padding:0; margin:0;}
-    .rules li{ font-size: clamp(15px,2.4vw,17px); margin:6px 0; opacity:.92;}
-    .rules li::before{ content:"• "; color:#cfe3d9; }
+    .city-logo{ height:150px; width:auto; object-fit:contain; filter: drop-shadow(0 2px 4px rgba(0,0,0,.22)); }
+    .city-name{ font-weight:600; font-size: clamp(15px,2.6vw,18px); font-family: var(--font-body); margin-top:6px; }
 
     /* Tabeller */
     .table-wrap{ width:100%; overflow:auto; -webkit-overflow-scrolling: touch; }
     table{ width:100%; border-collapse: collapse; color: var(--beige); min-width: 560px; }
-    th,td{ border-bottom:1px solid rgba(255,255,255,.1); padding:6px; text-align:left; }
+    th,td{ border-bottom:1px solid rgba(255,255,255,.1); padding:8px 6px; text-align:left; }
     th{ background: var(--brand-800); }
-
-    /* Leaflet pins */
-    .nabo-pin{ display:grid; place-items:center;
-      width:30px; height:30px; border-radius:50%;
-      background:var(--brand-800); color:white;
-      border:2px solid #2c3b31; box-shadow:0 2px 6px rgba(0,0,0,.35);
-      transform:translate(-15px,-15px);
-      font-size:18px; line-height:1; user-select:none;}
-    .nabo-pin svg{ width:16px; height:16px; fill:#fff; }
 
     header nav button{ background:transparent; border:0; color:var(--beige); padding:8px 12px; border-radius:8px; min-height:40px; }
     header nav button.active{ background: rgba(255,255,255,.1); }
 
-    /* Mobilanpassning */
+    /* Mobil */
     @media (max-width: 900px){
       #app{ grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
       #map{ height: 58svh; }
       .panel{ height:auto;}
-      .float-info{ position: static; transform:none; margin:10px auto 12px;}
+      .float-info{ position: static; transform:none; margin:10px auto 14px; max-width: 100%; }
       .toolbar{ gap:12px;}
       .toolbar button{ padding:12px 16px;}
     }
+
+/* ===== Mobile polish (utan att påverka desktop) ===== */
+@media (max-width: 900px){
+
+  /* 1) Ge kartan mer yta */
+  #map{ height: 70svh; }              /* mer höjd för att kunna röra sig */
+
+  /* 2) Gör infoboxen kompakt och rullbar om den blir lång */
+  .float-info{
+    position: static;                  /* sluta vara fixed */
+    transform: none;
+    margin: 8px auto 10px;
+    padding: 12px 14px;                /* mindre padding */
+    max-width: 100%;
+    gap: 10px;
+  }
+  .clue{ font-size: clamp(18px, 4.2vw, 22px); }
+  .toolbar{ gap: 10px; margin-top: 6px; }
+  .toolbar button{ padding: 10px 14px; min-height: 40px; }
+
+  /* 3) Gör sidopanelen till en "bottom sheet" som tar mindre plats */
+  .panel{
+    background: transparent;           /* smälter in */
+    color: inherit;
+    height: auto;
+    padding: 0 8px 12px;
+  }
+  .panel .box{
+    background: var(--brand-700);
+    color: var(--beige);
+    border-radius: 12px;
+    border: 0;
+    padding: 12px;
+  }
+  .panel .box + .box{ margin-top: 10px; }
+
+  /* 4) Komprimera tabellerna och dölj icke-viktiga kolumner på små skärmar */
+  .table-wrap{ overflow:auto; }
+  #roundsTable th:nth-child(3),
+  #roundsTable td:nth-child(3),   /* Stad */
+  #roundsTable th:nth-child(5),
+  #roundsTable td:nth-child(5) {  /* Felmarginal m */
+    display: none;                 /* döljs på mobil */
+  }
+  #roundsTable th, #roundsTable td{ padding: 6px 4px; }
+
+  #boardTable th:nth-child(5),
+  #boardTable td:nth-child(5),     /* Stad */
+  #boardTable th:nth-child(6),
+  #boardTable td:nth-child(6){     /* Datum */
+    display: none;
+  }
+  #boardTable th, #boardTable td{ padding: 6px 4px; }
+
+  /* 5) Overlay/kort: mindre loggor och tajtare grid */
+  .city-grid{ gap: 14px; }
+  .city-card{ width: min(220px, 88vw); padding: 14px; }
+  .city-logo{ height: 120px; }
+
+  /* 6) Regellistan: håll en rad, lagom stor och luftigt mellan varje */
+  .rules ul{
+    display: flex; justify-content: center; gap: 18px;
+  }
+  .rules li{ font-size: 1.05em; gap: 6px; }
+}
+
   </style>
 </head>
 <body>
@@ -179,8 +243,10 @@
 
   <div id="playCol">
     <div id="map"></div>
+
+    <!-- Infobox -->
     <div class="float-info">
-      <div id="place">Ledtråd: –</div>
+      <div id="clue" class="clue">Ledtråd: –</div>
       <div class="toolbar">
         <button id="btnNext">Ny plats</button>
         <button id="btnEnd">Avsluta & spara resultat</button>
@@ -207,6 +273,7 @@
       </div>
       <div class="sum" id="summary">0 rundor – Totala straffpoäng: 0 · Snittavstånd: 0 km</div>
     </div>
+
     <div class="box" id="boardBox" style="display:none;">
       <div><strong id="boardTitle">Leaderboard (server)</strong></div>
       <div class="hint">Toppresultat sparas i databasen.</div>
@@ -228,15 +295,15 @@
 
     <section class="city-grid">
       <div class="city-card" role="button" tabindex="0" aria-label="Stockholm" data-city="stockholm">
-	<img class="city-logo" src="/static/img/stockholm.png" alt="Stockholm">
+        <img class="city-logo" src="/static/img/stockholm.png" alt="Stockholm">
         <span class="city-name">Stockholm</span>
       </div>
       <div class="city-card" role="button" tabindex="0" aria-label="Göteborg" data-city="goteborg">
-	<img class="city-logo" src="/static/img/goteborg.png"  alt="Göteborg">
+        <img class="city-logo" src="/static/img/goteborg.png" alt="Göteborg">
         <span class="city-name">Göteborg</span>
       </div>
       <div class="city-card" role="button" tabindex="0" aria-label="Malmö" data-city="malmo">
-	<img class="city-logo" src="/static/img/malmo.png"     alt="Malmö">
+        <img class="city-logo" src="/static/img/malmo.png" alt="Malmö">
         <span class="city-name">Malmö</span>
       </div>
     </section>
@@ -254,156 +321,19 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  // --- state för ronder ---
-  let roundNo = 0;
-  const rounds = [];
-
-  function resetRounds(){
-    roundNo = 0;
-    rounds.length = 0;
-    clearMapGraphics();
-    const tbody = document.querySelector('#roundsTable tbody');
-    if (tbody) tbody.innerHTML = '';
-    updateSummary();
-  }
-
-  function clearMapGraphics(){
-    if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
-    if (trueMarker)  { map.removeLayer(trueMarker);  trueMarker  = null; }
-    if (line)        { map.removeLayer(line);        line        = null; }
-  }
-
-  function updateSummary(){
-    const sumEl = document.getElementById('summary');
-    if (!sumEl) return;
-    if (!rounds.length) { sumEl.textContent = '0 rundor – Totala straffpoäng: 0 · Snittavstånd: 0 km'; return; }
-    const tot = rounds.reduce((a,r)=>a + (r.score||0), 0);
-    const avg = rounds.reduce((a,r)=>a + (r.distance_km||0), 0) / rounds.length;
-    sumEl.textContent = `${rounds.length} runder – Totala straffpoäng: ${tot} · Snittavstånd: ${avg.toFixed(1)} km`;
-  }
-
-  // --- hämta ny ledtråd ---
-  async function newRound(){
-    if (!selectedCity){ alert('Välj stad först.'); return; }
-    clearMapGraphics();
-    setLocked(false);
-    try{
-      const res = await fetch(`/api/round?city=${encodeURIComponent(selectedCity)}`);
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      place = data.place; // { id, display_name, street, postnummer, ort, kommun, lan, lat, lon }
-      roundNo += 1;
-
-      // visa ledtråd
-      const info = document.getElementById('info');
-      if (info){
-        const ledtrad = place.display_name || [place.street, place.postnummer, place.ort].filter(Boolean).join(', ');
-        info.textContent = `Ledtråd ${roundNo}/${ROUNDS_TOTAL}: ${ledtrad}`;
-      }
-    }catch(err){
-      console.error('newRound error', err);
-      alert('Kunde inte hämta ledtråd. Se konsolen.');
-    }
-  }
-
-  // --- klick på kartan = gissning ---
-  async function onMapClick(e){
-    if (locked || !place) return;
-    setLocked(true); // lås tills svar kommer
-
-    const lat = e.latlng.lat;
-    const lon = e.latlng.lng;
-
-    try{
-      const res = await fetch(`/api/guess/map?city=${encodeURIComponent(selectedCity)}`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ place_id: place.id, lat, lon })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json(); // { distance_km, score, solution:{lat,lon} }
-
-      // rita grafik
-      clearMapGraphics();
-      guessMarker = L.marker([lat, lon], {icon: makeArrowIcon()}).addTo(map);
-      trueMarker  = L.marker([data.solution.lat, data.solution.lon], {icon: makeCheckIcon()}).addTo(map);
-      line = L.polyline([[lat,lon],[data.solution.lat,data.solution.lon]], {color:'#444', weight:2}).addTo(map);
-      map.fitBounds(line.getBounds(), {padding:[30,30]});
-
-      // lägg rad i tabellen
-      const tbody = document.querySelector('#roundsTable tbody');
-      if (tbody){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${roundNo}</td>
-          <td>${escapeHtml(place.display_name || '')}</td>
-          <td>${escapeHtml(selectedCity)}</td>
-          <td>${data.distance_km.toFixed(2)} km</td>
-          <td>${(data.distance_km*1000).toFixed(0)} m</td>
-          <td>${data.score}</td>`;
-        tbody.appendChild(tr);
-      }
-
-      rounds.push({distance_km:data.distance_km, score:data.score});
-      updateSummary();
-
-      // nästa runda eller slut
-      if (roundNo < ROUNDS_TOTAL){
-        setLocked(false);
-        // liten paus så man hinner se resultatet
-        setTimeout(()=>newRound(), 500);
-      }else{
-        if (typeof endGame === 'function') endGame();
-      }
-    }catch(err){
-      console.error('guess error', err);
-      alert('Kunde inte skicka gissning. Se konsolen.');
-      setLocked(false);
-    }
-  }
-
-  // --- leaderboard ---
-  async function refreshLeaderboard(){
-    try{
-      const res = await fetch('/api/leaderboard?limit=50&order=best');
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json(); // { items: [...] }
-      const tbody = document.querySelector('#boardTable tbody');
-      if (!tbody) return;
-      tbody.innerHTML = '';
-      (data.items || []).forEach((row,i)=>{
-        const tr = document.createElement('tr');
-        const d = (row.created_at || '').toString().replace('T',' ').replace('Z','');
-        tr.innerHTML = `
-          <td>${i+1}</td>
-          <td>${escapeHtml(row.name||'')}</td>
-          <td>${row.score}</td>
-          <td>${row.rounds}</td>
-          <td>${escapeHtml(row.city||'')}</td>
-          <td>${escapeHtml(d)}</td>`;
-        tbody.appendChild(tr);
-      });
-    }catch(err){
-      console.error('refreshLeaderboard error', err);
-    }
-  }
-
-  // (valfri) enkel avslut som bara låser spelet
-  function endGame(){
-    setLocked(true);
-    const info = document.getElementById('info');
-    if (info) info.textContent = 'Spelet slut – byt flik eller starta om.';
-  }
-  // ======= spelparametrar =======
+  // ======= State =======
   const ROUNDS_TOTAL = 5;
   let selectedCity = null;
   const cityCenters = {};
   let place = null;
   let guessMarker = null, trueMarker = null, line = null;
   let locked = true;
-
+  let roundNo = 0;
+  let roundFinished = false;
+  const rounds = [];
   const naboGreen = "#4d6151";
 
+  // ======= Helpers =======
   function makeArrowIcon(deg=0){
     const html = '<div class="nabo-pin"><svg style="transform: rotate(' + deg + 'deg)" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l5.5 9h-4v9h-3v-9h-4L12 3z"/></svg></div>';
     return L.divIcon({className: "", html, iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-15]});
@@ -426,17 +356,28 @@
       if (flag) map.off('click', onMapClick); else map.on('click', onMapClick);
     }
   }
+  function clearMapGraphics(){
+    if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
+    if (trueMarker)  { map.removeLayer(trueMarker);  trueMarker  = null; }
+    if (line)        { map.removeLayer(line);        line        = null; }
+  }
+  function updateSummary(){
+    const sumEl = document.getElementById('summary');
+    if (!sumEl) return;
+    if (!rounds.length) { sumEl.textContent = '0 rundor – Totala straffpoäng: 0 · Snittavstånd: 0 km'; return; }
+    const tot = rounds.reduce((a,r)=>a + (r.score||0), 0);
+    const avg = rounds.reduce((a,r)=>a + (r.distance_km||0), 0) / rounds.length;
+    sumEl.textContent = `${rounds.length} runder – Totala straffpoäng: ${tot} · Snittavstånd: ${avg.toFixed(1)} km`;
+  }
 
-  // --- Leaflet-kartan ---
+  // ======= Map =======
   const map = L.map('map').setView([62.0, 15.0], 5);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-  if (typeof onMapClick === 'function') map.on('click', onMapClick); // skydda om funktionen inte finns än
 
-  // --- Hämta centers för städerna (fallback finns) ---
-  fetch('/api/cities')
-    .then(r=>r.json())
-    .then(j => { (j.cities||[]).forEach(c => cityCenters[c.key] = c.center); })
-    .catch(()=>{ /* ok */ });
+  // ======= City centers =======
+  fetch('/api/cities').then(r=>r.json()).then(j=>{
+    (j.cities||[]).forEach(c => { cityCenters[c.key] = c.center; });
+  });
 
   function defaultCenter(k){
     if (k === 'stockholm') return [59.334, 18.063];
@@ -453,61 +394,212 @@
     if (ov) ov.style.display = 'none';
     const info = document.getElementById('info');
     if (info) info.textContent = 'Klicka på kartan för att gissa.';
-    if (typeof resetRounds === 'function') resetRounds();
-    if (typeof newRound === 'function') newRound();
+    resetRounds();
+    newRound();
   }
 
-  // --- Event delegation på overlayn för klick/keyboard ---
-  document.addEventListener('DOMContentLoaded', () => {
-    const overlay = document.getElementById('overlay');
-    if (!overlay) return;
+  // ======= Rounds =======
+  function resetRounds(){
+    roundNo = 0;
+    rounds.length = 0;
+    clearMapGraphics();
+    const tbody = document.querySelector('#roundsTable tbody');
+    if (tbody) tbody.innerHTML = '';
+    updateSummary();
+  }
 
-    overlay.addEventListener('click', (e) => {
-      const card = e.target.closest('.city-card');
-      if (!card) return;
-      const key = card.dataset.city;
-      if (key) chooseCity(key);
-    });
+  async function newRound(){
+    if (!selectedCity){ alert('Välj stad först.'); return; }
+    clearMapGraphics();
+    setLocked(false);
+    roundFinished = false;
+    try{
+      const res = await fetch(`/api/round?city=${encodeURIComponent(selectedCity)}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      place = data.place;
+      roundNo += 1;
 
-    overlay.querySelectorAll('.city-card').forEach(card => {
-      card.setAttribute('role', 'button');
-      card.setAttribute('tabindex', '0');
-      card.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          const key = card.dataset.city;
-          if (key) chooseCity(key);
-        }
+      const firstName = (place.display_name || '').split(',')[0] || '';
+      const clueEl = document.getElementById('clue');
+      if (clueEl) clueEl.textContent = `Ledtråd: ${firstName}`;
+
+      const info = document.getElementById('info');
+      if (info) info.textContent = 'Klicka på kartan för att gissa.';
+    }catch(err){
+      console.error('newRound error', err);
+      alert('Kunde inte hämta ledtråd. Se konsolen.');
+    }
+  }
+
+  async function onMapClick(e){
+    if (locked || !place) return;
+    setLocked(true);
+
+    const lat = e.latlng.lat;
+    const lon = e.latlng.lng;
+
+    try{
+      const res = await fetch(`/api/guess/map?city=${encodeURIComponent(selectedCity)}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ place_id: place.id, lat, lon })
       });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+
+      // Rita grafik (pil pekar mot facit)
+      clearMapGraphics();
+      const bearing = bearingDeg(lat, lon, data.solution.lat, data.solution.lon);
+      guessMarker = L.marker([lat, lon], { icon: makeArrowIcon(bearing) }).addTo(map);
+      trueMarker  = L.marker([data.solution.lat, data.solution.lon], { icon: makeCheckIcon() }).addTo(map);
+      line = L.polyline([[lat,lon],[data.solution.lat,data.solution.lon]], {color:'#444', weight:2}).addTo(map);
+      map.fitBounds(line.getBounds(), {padding:[30,30]});
+
+      // Tabellrad
+      const tbody = document.querySelector('#roundsTable tbody');
+      if (tbody){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${roundNo}</td>
+          <td>${escapeHtml(place.display_name || '')}</td>
+          <td>${escapeHtml(selectedCity)}</td>
+          <td>${data.distance_km.toFixed(2)} km</td>
+          <td>${(data.distance_km*1000).toFixed(0)} m</td>
+          <td>${data.score}</td>`;
+        tbody.appendChild(tr);
+      }
+
+      rounds.push({distance_km:data.distance_km, score:data.score});
+      updateSummary();
+
+      roundFinished = true;
+      const info = document.getElementById('info');
+      if (info) {
+        const kvar = ROUNDS_TOTAL - roundNo;
+        info.innerHTML = `<strong>Avstånd:</strong> ${data.distance_km.toFixed(2)} km · <strong>Poäng:</strong> ${data.score}. `
+          + (kvar > 0 ? `Klicka <em>Ny plats</em> för nästa (${roundNo}/${ROUNDS_TOTAL}).`
+                      : `Klicka <em>Avsluta & spara resultat</em>.`);
+      }
+    }catch(err){
+      console.error('guess error', err);
+      alert('Kunde inte skicka gissning. Se konsolen.');
+      setLocked(false);
+    }
+  }
+
+  // ======= Leaderboard =======
+  async function refreshLeaderboard(){
+    try{
+      const res = await fetch('/api/leaderboard?limit=50&order=best');
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const tbody = document.querySelector('#boardTable tbody');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+      (data.items || []).forEach((row,i)=>{
+        const tr = document.createElement('tr');
+        const d = (row.created_at || '').toString().replace('T',' ').replace('Z','');
+        tr.innerHTML = `
+          <td>${i+1}</td>
+          <td>${escapeHtml(row.name||'')}</td>
+          <td>${row.score}</td>
+          <td>${row.rounds}</td>
+          <td>${escapeHtml(row.city||'')}</td>
+          <td>${escapeHtml(d)}</td>`;
+        tbody.appendChild(tr);
+      });
+    }catch(err){
+      console.error('refreshLeaderboard error', err);
+    }
+  }
+
+  async function endGame(){
+    setLocked(true);
+    const total = (rounds || []).reduce((a,r)=>a + (r.score||0), 0);
+    const name = prompt("Spelet slut! Skriv ditt namn för leaderboard:", "") || "Anon";
+    try {
+      const payload = { name, score: total, rounds: (rounds||[]).length, city: selectedCity || "" };
+      const res = await fetch('/api/leaderboard', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      alert("Resultat sparat ✅");
+    } catch (e){
+      console.error("save leaderboard error", e);
+      alert("Kunde inte spara resultatet.");
+    } finally {
+      // Växla till leaderboard och hämta listan
+      const tabBoard = document.getElementById('tabBoard');
+      if (tabBoard) tabBoard.click();
+      await refreshLeaderboard();
+      const info = document.getElementById('info');
+      if (info) info.textContent = 'Spelet slut – resultat sparat.';
+    }
+  }
+
+  // ======= Event wiring =======
+  map.on('click', onMapClick);
+
+  document.addEventListener('DOMContentLoaded', () => {
+    // Overlay: klick & keyboard
+    const overlay = document.getElementById('overlay');
+    if (overlay){
+      overlay.addEventListener('click', (e) => {
+        const card = e.target.closest('.city-card');
+        if (!card) return;
+        const key = card.dataset.city;
+        if (key) chooseCity(key);
+      });
+      overlay.querySelectorAll('.city-card').forEach(card => {
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            const key = card.dataset.city;
+            if (key) chooseCity(key);
+          }
+        });
+      });
+    }
+
+    // Flikar
+    const tabPlay = document.getElementById('tabPlay');
+    const tabBoard = document.getElementById('tabBoard');
+    if (tabPlay) tabPlay.addEventListener('click', ()=>{
+      tabPlay.classList.add('active');
+      if (tabBoard) tabBoard.classList.remove('active');
+      const playCol = document.getElementById('playCol'); if (playCol) playCol.style.display = '';
+      const boardBox = document.getElementById('boardBox'); if (boardBox) boardBox.style.display = 'none';
     });
-  });
+    if (tabBoard) tabBoard.addEventListener('click', async ()=>{
+      tabBoard.classList.add('active');
+      if (tabPlay) tabPlay.classList.remove('active');
+      const playCol = document.getElementById('playCol'); if (playCol) playCol.style.display = 'none';
+      const boardBox = document.getElementById('boardBox'); if (boardBox) boardBox.style.display = '';
+      await refreshLeaderboard();
+    });
 
-  // --- Flikar (spela/leaderboard) ---
-  const tabPlay = document.getElementById('tabPlay');
-  const tabBoard = document.getElementById('tabBoard');
-  if (tabPlay) tabPlay.addEventListener('click', ()=>{
-    tabPlay.classList.add('active');
-    if (tabBoard) tabBoard.classList.remove('active');
-    const playCol = document.getElementById('playCol'); if (playCol) playCol.style.display = '';
-    const boardBox = document.getElementById('boardBox'); if (boardBox) boardBox.style.display = 'none';
-  });
-  if (tabBoard) tabBoard.addEventListener('click', async ()=>{
-    tabBoard.classList.add('active');
-    if (tabPlay) tabPlay.classList.remove('active');
-    const playCol = document.getElementById('playCol'); if (playCol) playCol.style.display = 'none';
-    const boardBox = document.getElementById('boardBox'); if (boardBox) boardBox.style.display = '';
-    if (typeof refreshLeaderboard === 'function') await refreshLeaderboard();
-  });
+    // Knappar
+    const btnNext = document.getElementById('btnNext');
+    if (btnNext) btnNext.addEventListener('click', () => {
+      if (!selectedCity){ alert('Välj stad först.'); return; }
+      if (!roundFinished){
+        alert('Gör en gissning på kartan först.');
+        return;
+      }
+      if (roundNo < ROUNDS_TOTAL) newRound(); else endGame();
+    });
 
-  // --- Knappar (om de finns) ---
-  const btnNext = document.getElementById('btnNext');
-  if (btnNext) btnNext.addEventListener('click', () => {
-    if (typeof newRound === 'function') newRound();
-  });
-
-  const btnEnd = document.getElementById('btnEnd');
-  if (btnEnd) btnEnd.addEventListener('click', () => {
-    if (typeof endGame === 'function') endGame();
+    const btnEnd = document.getElementById('btnEnd');
+    if (btnEnd) btnEnd.addEventListener('click', async () => {
+      try { await endGame(); }
+      catch(e){ console.error('endGame error:', e); alert('Kunde inte avsluta/spara.'); }
+    });
   });
 </script>
-
+</body>
+</html>
