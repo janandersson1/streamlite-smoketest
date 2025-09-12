@@ -120,10 +120,11 @@ def _exec(sql: str, params: tuple = ()):
         cur.execute(sql, params)
         if not USE_PG:
             conn.commit()
-        try:
+        # Endast SELECT har resultatschema
+        if getattr(cur, "description", None):
             return cur.fetchall()
-        except Exception:
-            return []
+        return []
+
 
 
 # ========= Feedback table =========
@@ -236,38 +237,33 @@ CITY_CENTERS = {
     "malmo":     (55.605, 13.003),
 }
 
-from pydantic import conint
+from pydantic import BaseModel, conint
+import sys, traceback
 
 class ScoreIn(BaseModel):
-    name: str
+    name: str | None = ""
     score: conint(ge=0)
     rounds: conint(ge=1, le=50)
     city: str | None = ""
 
 @app.post("/api/leaderboard")
 def save_score(s: ScoreIn):
-    ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
-    _exec(
-        "INSERT INTO leaderboard (created_at,name,score,rounds,city) VALUES (?, ?, ?, ?, ?)"
-        if not USE_PG else
-        "INSERT INTO leaderboard (created_at,name,score,rounds,city) VALUES ($1,$2,$3,$4,$5)",
-        (ts, s.name.strip() or "Anon", int(s.score), int(s.rounds), (s.city or "").strip())
-    )
-    return {"ok": True}
+    try:
+        ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
+        name = (s.name or "").strip() or "Anon"
+        city = (s.city or "").strip()
+        score = int(s.score)
+        rounds = int(s.rounds)
 
-@app.get("/api/leaderboard")
-def list_scores(limit: int = 50, order: str = "best"):
-    limit = max(1, min(200, int(limit or 50)))
-    order_clause = "ORDER BY score ASC, created_at ASC" if order != "latest" else "ORDER BY created_at DESC"
-    rows = _exec(f"SELECT id, created_at, name, score, rounds, city FROM leaderboard {order_clause} LIMIT {limit}")
-    items = []
-    if USE_PG:
-        for r in rows:
-            items.append({"id": r[0], "created_at": str(r[1]), "name": r[2], "score": r[3], "rounds": r[4], "city": r[5]})
-    else:
-        for r in rows:
-            items.append(dict(r))
-    return {"items": items}
+        sql_sqlite = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES (?, ?, ?, ?, ?)"
+        sql_pg     = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES ($1, $2, $3, $4, $5)"
+        _exec(sql_pg if USE_PG else sql_sqlite, (ts, name, score, rounds, city))
+        return {"ok": True}
+    except Exception as e:
+        print("ERROR save_score:", repr(e), file=sys.stderr)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="DB insert failed")
+
 
 
 
