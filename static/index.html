@@ -533,60 +533,92 @@ const rightAddress =
 }
 
 
-  // ======= Leaderboard =======
-  async function refreshLeaderboard(){
-    try{
-      const res = await fetch('/api/leaderboard?limit=50&order=best');
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      const tbody = document.querySelector('#boardTable tbody');
-      if (!tbody) return;
-      tbody.innerHTML = '';
-      (data.items || []).forEach((row,i)=>{
-        const tr = document.createElement('tr');
-        const d = (row.created_at || '').toString().replace('T',' ').replace('Z','');
-tr.innerHTML = `
-  <td>${i+1}</td>
-  <td>${escapeHtml(row.name||'')}</td>
-  <td>${row.score}</td>
-  <td>${capitalize(row.city||'')}</td>
-  <td>${escapeHtml(d)}</td>`;
+function cap(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
 
-        tbody.appendChild(tr);
-      });
-    }catch(err){
-      console.error('refreshLeaderboard error', err);
-    }
+function formatSv(dtStr){
+  // Robust formatering till svensk tid (CEST/CET)
+  const d = new Date(dtStr);
+  if (isNaN(d)) return dtStr || '';
+  return d.toLocaleString('sv-SE', {
+    timeZone: 'Europe/Stockholm',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
+// ======= Leaderboard =======
+async function refreshLeaderboard(){
+  try{
+    const res = await fetch('/api/leaderboard?limit=50&order=best');
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    const tbody = document.querySelector('#boardTable tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    (data.items || []).forEach((row,i)=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${i+1}</td>
+        <td>${escapeHtml(row.name || '')}</td>
+        <td>${Number(row.score)}</td>
+        <td>${escapeHtml(cap(row.city || ''))}</td>
+        <td>${escapeHtml(formatSv(row.created_at || ''))}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }catch(err){
+    console.error('refreshLeaderboard error', err);
   }
+}
+
 function capitalize(s){
   if (!s) return '';
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 
-  async function endGame(){
-    setLocked(true);
-    const total = (rounds || []).reduce((a,r)=>a + (r.score||0), 0);
-    const name = prompt("Spelet slut! Skriv ditt namn för leaderboard:", "") || "Anon";
-    try {
-      const payload = { name, score: total, rounds: (rounds||[]).length, city: selectedCity || "" };
-      const res = await fetch('/api/leaderboard', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(await res.text());
-      alert("Resultat sparat ✅");
-    } catch (e){
-      console.error("save leaderboard error", e);
-      alert("Kunde inte spara resultatet.");
-    } finally {
-      showTab('board');
-      await refreshLeaderboard();
-      const info = document.getElementById('info');
-      if (info) info.textContent = 'Spelet slut – resultat sparat.';
-    }
+async function endGame(){
+  setLocked(true);
+
+  const total = Number((rounds || []).reduce((a,r)=>a + (r.score||0), 0));
+  if (!total && total !== 0){
+    alert('Kunde inte räkna ut totalpoängen.');
+    setLocked(false);
+    return;
   }
+
+  const name = (prompt("Spelet slut! Skriv ditt namn för leaderboard:", "") || "Anon").trim();
+  try {
+    const payload = {
+      name,
+      score: total,                 // viktig: numeriskt
+      rounds: (rounds||[]).length,  // t.ex. 5
+      city: selectedCity || ""
+    };
+
+    const res = await fetch('/api/leaderboard', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(await res.text());
+
+    // växla till leaderboard och ladda om direkt
+    showTab('board');
+    await refreshLeaderboard();
+
+    alert("Resultat sparat ✅");
+  } catch (e){
+    console.error("save leaderboard error", e);
+    alert("Kunde inte spara resultatet. Se konsolen.");
+  } finally {
+    const info = document.getElementById('info');
+    if (info) info.textContent = 'Spelet slut – resultat sparat.';
+  }
+}
+
 
   // ======= Tabs (EN källa till sanning) =======
 function showTab(tab){
