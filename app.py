@@ -248,27 +248,55 @@ class ScoreIn(BaseModel):
 
 @app.post("/api/leaderboard")
 def save_score(s: ScoreIn):
+    try:
+        ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
+        name = (s.name or "").strip() or "Anon"
+        city = (s.city or "").strip()
+        score = int(s.score)
+        rounds = int(s.rounds)
+
+        sql_sqlite = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES (?, ?, ?, ?, ?)"
+        sql_pg     = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES (%s, %s, %s, %s, %s)"
+        _exec(sql_pg if USE_PG else sql_sqlite, (ts, name, score, rounds, city))
+        return {"ok": True}
+    except Exception as e:
+        print("ERROR save_score:", repr(e))
+        raise HTTPException(status_code=500, detail="DB insert failed")
+
 
 @app.get("/api/leaderboard")
-def get_leaderboard(limit: int = 50, order: str = "best"):
+def get_leaderboard(limit: int = 50, order: str = "best", city: str | None = None):
     """
     Hämta leaderboard med toppresultat.
     - limit: max antal rader (default 50)
     - order: "best" = sortera på score, "latest" = sortera på senaste spel
+    - city: filtrera på stad (stockholm, malmo, goteborg)
     """
     limit = max(1, min(limit, 200))
+
     if order == "latest":
         order_sql = "created_at DESC"
     else:
         order_sql = "score ASC"   # lägre score = bättre
 
+    params: list = []
+    where_sql = ""
+    if city:
+        key = city.lower().strip()
+        if key not in ("stockholm", "malmo", "goteborg"):
+            raise HTTPException(status_code=400, detail=f"Ogiltig stad: {city}")
+        where_sql = "WHERE city = ?"
+        params.append(key)
+
     sql = f"""
         SELECT id, created_at, name, score, rounds, city
         FROM leaderboard
+        {where_sql}
         ORDER BY {order_sql}
         LIMIT ?
     """
-    rows = _exec(sql, (limit,))
+    params.append(limit)
+    rows = _exec(sql, tuple(params))
 
     out = []
     if USE_PG:
@@ -283,6 +311,7 @@ def get_leaderboard(limit: int = 50, order: str = "best"):
             out.append(dict(r))
 
     return {"items": out}
+
 
 
 
