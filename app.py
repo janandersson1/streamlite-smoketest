@@ -268,49 +268,60 @@ def save_score(s: ScoreIn):
 def get_leaderboard(limit: int = 50, order: str = "best", city: str | None = None):
     """
     Hämta leaderboard med toppresultat.
-    - limit: max antal rader (default 50)
-    - order: "best" = sortera på score, "latest" = sortera på senaste spel
-    - city: filtrera på stad (stockholm, malmo, goteborg)
+    - limit: max 200
+    - order: "best" (score ASC) eller "latest" (created_at DESC)
+    - city: "stockholm" | "malmo" | "goteborg" (valfritt filter)
     """
     limit = max(1, min(limit, 200))
 
-    if order == "latest":
-        order_sql = "created_at DESC"
-    else:
-        order_sql = "score ASC"   # lägre score = bättre
+    # sortering – whitelistad för att undvika SQL injection
+    order_sql = "created_at DESC" if order == "latest" else "score ASC"
 
-    params: list = []
+    # bygg WHERE + placeholders beroende på DB
+    params = []
     where_sql = ""
     if city:
         key = city.lower().strip()
         if key not in ("stockholm", "malmo", "goteborg"):
             raise HTTPException(status_code=400, detail=f"Ogiltig stad: {city}")
-        where_sql = "WHERE city = ?"
+        where_sql = f"WHERE city = {'%s' if USE_PG else '?'}"
         params.append(key)
 
+    # LIMIT som placeholder (olika syntax per driver)
+    limit_ph = "%s" if USE_PG else "?"
     sql = f"""
         SELECT id, created_at, name, score, rounds, city
         FROM leaderboard
         {where_sql}
         ORDER BY {order_sql}
-        LIMIT ?
+        LIMIT {limit_ph}
     """
     params.append(limit)
+
     rows = _exec(sql, tuple(params))
+
+    # snygga stadsnamn i svaret
+    city_map = {"stockholm": "Stockholm", "malmo": "Malmö", "goteborg": "Göteborg"}
 
     out = []
     if USE_PG:
         for r in rows:
             out.append({
-                "id": r[0], "created_at": r[1],
-                "name": r[2], "score": r[3],
-                "rounds": r[4], "city": r[5],
+                "id": r[0],
+                "created_at": r[1],
+                "name": r[2],
+                "score": r[3],
+                "rounds": r[4],
+                "city": city_map.get((r[5] or "").lower(), r[5]),
             })
     else:
         for r in rows:
-            out.append(dict(r))
+            d = dict(r)
+            d["city"] = city_map.get((d.get("city") or "").lower(), d.get("city"))
+            out.append(d)
 
     return {"items": out}
+
 
 
 
