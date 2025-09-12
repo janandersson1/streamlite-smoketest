@@ -1,306 +1,583 @@
 from __future__ import annotations
 
-import csv, os, re, random, datetime, threading, sqlite3
-from math import radians, sin, cos, asin, sqrt
+import csv, os, random, datetime, sqlite3
 from pathlib import Path
-from typing import Dict, List, Tuple
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, constr, conint
+from pydantic import BaseModel
 
 # =========================================================
-# DB settings (env variabel)
+# DB settings (Render: Postgres via DATABASE_URL, annars SQLite)
 # =========================================================
 DB_URL = os.getenv("DATABASE_URL", "").strip()
 USE_PG = DB_URL != ""  # True = Postgres, False = SQLite
 
-# =========================================================
-# Paths & app
-# =========================================================
+# Paths
 APP_DIR = Path(__file__).parent.resolve()
-
 STATIC_DIR = APP_DIR / "static"
-IMG_DIR = APP_DIR / "img"             # fallback: om bilder ligger här
+IMG_DIR = APP_DIR / "img"
 TEMPLATES_DIR = APP_DIR / "templates"
+SQLITE_PATH = APP_DIR / "app.db"
 
+
+# ===== Platser från CSV (riktiga speldata) =====
+# ===== Platser från CSV (riktiga speldata) =====
+import csv
+
+DATA_DIR = APP_DIR / "data"
+CITY_FILES = {
+    "stockholm": DATA_DIR / "places_stockholm.csv",
+    "goteborg":  DATA_DIR / "places_goteborg.csv",
+    "malmo":     DATA_DIR / "places_malmo.csv",
+}
+
+CITY_PLACES: dict[str, list[dict]] = {}
+
+def _to_float(s: str | None):
+    try:
+        return float(str(s).replace(",", "."))
+    except Exception:
+        return None
+
+def load_places():
+    for city, path in CITY_FILES.items():
+        rows: list[dict] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    lat = _to_float(r.get("lat"))
+                    lon = _to_float(r.get("lon"))
+                    if lat is None or lon is None:
+                        continue
+                    street = (r.get("street") or "").strip()
+                    postnr = (r.get("postnummer") or "").strip()
+                    ort    = (r.get("ort") or "").strip()
+                    address_full = ", ".join(p for p in [street, postnr, ort] if p)
+
+                    rows.append({
+                        "id": (r.get("id") or "").strip(),
+                        "display_name": (r.get("display_name") or "").strip(),
+                        "alt_names": (r.get("alt_names") or "").strip(),
+                        "street": street,
+                        "postnummer": postnr,
+                        "ort": ort,
+                        "kommun": (r.get("kommun") or "").strip(),
+                        "lan": (r.get("lan") or "").strip(),
+                        "lat": lat,
+                        "lon": lon,
+                        "svardighet": (r.get("svardighet") or "").strip(),
+                        "address_full": address_full,   # ⬅️ viktig
+                    })
+        CITY_PLACES[city] = rows
+
+# Ladda CSV:erna vid start
+load_places()
+
+
+# App
 app = FastAPI(title="Geoguessr - The Nabo Way")
 
 # Skapa mappar lokalt om de saknas
 STATIC_DIR.mkdir(exist_ok=True)
 (STATIC_DIR / "img").mkdir(parents=True, exist_ok=True)
 (STATIC_DIR / "fonts").mkdir(parents=True, exist_ok=True)
-IMG_DIR.mkdir(exist_ok=True)  # fallback
+IMG_DIR.mkdir(exist_ok=True)
 TEMPLATES_DIR.mkdir(exist_ok=True)
 
-# Mounta /static (primärt)
+# Mounta statiska mappar
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-# Mounta även /img → ./img (fallback för dina gamla filer)
 app.mount("/img", StaticFiles(directory=str(IMG_DIR)), name="img")
 
 # Jinja2 templates
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# Debug endpoint för att kolla mapparna
-@app.get("/debug/static")
-def debug_static():
-    return {
-        "cwd": str(APP_DIR),
-        "static_dir": str(STATIC_DIR.resolve()),
-        "img_dir": str(IMG_DIR.resolve()),
-        "templates_dir": str(TEMPLATES_DIR.resolve()),
-        "has_stockholm_static": (STATIC_DIR / "img" / "stockholm.png").exists(),
-        "has_stockholm_img": (IMG_DIR / "stockholm.png").exists(),
-    }
-
 # =========================================================
-# Leaderboard – Postgres i prod, SQLite lokalt
+# DB helpers
 # =========================================================
-_db_lock = threading.Lock()
-DB_PATH = str(APP_DIR / "leaderboard.sqlite3")  # fallback
-
-if USE_PG:
-    import psycopg
-    from psycopg.rows import dict_row
-
-    def _pg_exec(sql: str, args: tuple = ()):
-        with _db_lock:
-            with psycopg.connect(DB_URL) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql, args)
-                conn.commit()
-
-    def _pg_query(sql: str, args: tuple = ()):
-        with _db_lock:
-            with psycopg.connect(DB_URL) as conn:
-                with conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute(sql, args)
-                    return cur.fetchall()
-
-    def _ensure_table():
-        _pg_exec("""
-        CREATE TABLE IF NOT EXISTS leaderboard (
-          id BIGSERIAL PRIMARY KEY,
-          name TEXT NOT NULL,
-          score INTEGER NOT NULL,
-          rounds INTEGER NOT NULL,
-          city TEXT,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """)
-    _ensure_table()
-
-else:
-    def _sq_exec(sql: str, args: tuple = ()):
-        with _db_lock:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute(sql, args)
-                conn.commit()
-
-    def _sq_query(sql: str, args: tuple = ()):
-        with _db_lock:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                cur = conn.execute(sql, args)
-                return [dict(r) for r in cur.fetchall()]
-
-    def _ensure_table():
-        _sq_exec("""
-        CREATE TABLE IF NOT EXISTS leaderboard (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          score INTEGER NOT NULL,
-          rounds INTEGER NOT NULL,
-          city TEXT,
-          created_at TEXT NOT NULL
-        )
-        """)
-    _ensure_table()
-
-def db_exec(sql: str, args: tuple = ()):
-    return _pg_exec(sql, args) if USE_PG else _sq_exec(sql, args)
-
-def db_query(sql: str, args: tuple = ()):
-    return _pg_query(sql, args) if USE_PG else _sq_query(sql, args)
-
-class ScoreIn(BaseModel):
-    name: constr(strip_whitespace=True, min_length=1, max_length=40)
-    score: conint(ge=0, le=10_000_000)
-    rounds: conint(ge=1, le=100)
-    city: str | None = None
-
-@app.post("/api/leaderboard")
-def api_leaderboard_post(payload: ScoreIn):
+try:
     if USE_PG:
-        db_exec(
-            "INSERT INTO leaderboard(name,score,rounds,city) VALUES (%s,%s,%s,%s)",
-            (payload.name, int(payload.score), int(payload.rounds), payload.city),
-        )
+        import psycopg
+except Exception:
+    USE_PG = False
+
+def _connect():
+    if USE_PG:
+        return psycopg.connect(DB_URL, autocommit=True)
     else:
-        now = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        db_exec(
-            "INSERT INTO leaderboard(name,score,rounds,city,created_at) VALUES (?,?,?,?,?)",
-            (payload.name, int(payload.score), int(payload.rounds), payload.city, now),
-        )
+        conn = sqlite3.connect(str(SQLITE_PATH))
+        conn.row_factory = sqlite3.Row
+        return conn
+
+def _exec(sql: str, params: tuple = ()):
+    with _connect() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        if not USE_PG:
+            conn.commit()
+        try:
+            return cur.fetchall()
+        except Exception:
+            return []
+
+# =========================================================
+# Skapa feedback-tabell
+# =========================================================
+if USE_PG:
+    _exec("""
+    CREATE TABLE IF NOT EXISTS feedback (
+      id          BIGSERIAL PRIMARY KEY,
+      created_at  TIMESTAMPTZ NOT NULL,
+      name        TEXT,
+      email       TEXT,
+      category    TEXT,
+      message     TEXT NOT NULL
+    )
+    """)
+else:
+    _exec("""
+    CREATE TABLE IF NOT EXISTS feedback (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at  TEXT NOT NULL,
+      name        TEXT,
+      email       TEXT,
+      category    TEXT,
+      message     TEXT NOT NULL
+    )
+    """)
+
+# ==================== Leaderboard table ====================
+if USE_PG:
+    _exec("""
+    CREATE TABLE IF NOT EXISTS leaderboard (
+      id          BIGSERIAL PRIMARY KEY,
+      created_at  TIMESTAMPTZ NOT NULL,
+      name        TEXT NOT NULL,
+      score       INTEGER NOT NULL,     -- lägre = bättre
+      rounds      INTEGER NOT NULL,
+      city        TEXT
+    );
+    """)
+else:
+    _exec("""
+    CREATE TABLE IF NOT EXISTS leaderboard (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at  TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      score       INTEGER NOT NULL,     -- lägre = bättre
+      rounds      INTEGER NOT NULL,
+      city        TEXT
+    );
+    """)
+
+
+# =========================================================
+# Modeller
+# =========================================================
+class Feedback(BaseModel):
+    name: str | None = ""
+    email: str | None = ""
+    category: str = "Feedback"
+    message: str
+
+# =========================================================
+# Endpoints
+# =========================================================
+@app.post("/api/feedback")
+async def save_feedback(fb: Feedback, request: Request):
+    msg = (fb.message or "").strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="Tomt meddelande")
+
+    ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
+
+    sql_sqlite = "INSERT INTO feedback (created_at, name, email, category, message) VALUES (?, ?, ?, ?, ?)"
+    sql_pg = "INSERT INTO feedback (created_at, name, email, category, message) VALUES ($1, $2, $3, $4, $5)"
+    _exec(sql_sqlite if not USE_PG else sql_pg,
+          (ts, (fb.name or "").strip(), (fb.email or "").strip(), (fb.category or "Feedback").strip(), msg))
+
     return {"ok": True}
 
-@app.get("/api/leaderboard")
-def api_leaderboard_get(limit: int = 50, order: str = "best"):
-    order_sql = "score ASC, created_at ASC" if order == "best" else "created_at DESC"
+@app.get("/api/feedbacks")
+def list_feedbacks():
+    rows = _exec("SELECT id, created_at, name, email, category, message FROM feedback ORDER BY id DESC")
+    out = []
     if USE_PG:
-        rows = db_query(
-            f"SELECT name,score,rounds,city,created_at FROM leaderboard "
-            f"ORDER BY {order_sql} LIMIT %s",
-            (int(limit),),
-        )
+        for r in rows:
+            out.append({
+                "id": r[0], "created_at": r[1], "name": r[2],
+                "email": r[3], "category": r[4], "message": r[5]
+            })
     else:
-        rows = db_query(
-            f"SELECT name,score,rounds,city,created_at FROM leaderboard "
-            f"ORDER BY {order_sql} LIMIT ?",
-            (int(limit),),
-        )
-    return {"items": rows, "order": order}
+        for r in rows:
+            out.append(dict(r))
+    return {"feedbacks": out}
 
-# =========================================================
-# Städer & CSV-laddning
-# =========================================================
-def norm_city(s: str) -> str:
-    s = (s or "").lower()
-    for a, b in {"ö": "o", "ä": "a", "å": "a", " ": ""}.items():
-        s = s.replace(a, b)
-    return s
+# Debug endpoint
+@app.get("/debug/static")
+def debug_static():
+    return {"static_dir": str(STATIC_DIR), "templates_dir": str(TEMPLATES_DIR)}
 
-DATAFILES: Dict[str, Path] = {
-    "stockholm": APP_DIR / "places_stockholm.csv",
-    "goteborg":  APP_DIR / "places_goteborg.csv",
-    "malmo":     APP_DIR / "places_malmo.csv",
-}
+# Root – servera index.html
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Index.html saknas i /static</h1>")
 
-CITY_CENTERS: Dict[str, Tuple[float, float]] = {
+# ===================== Simple game endpoints (stubbar för test) =====================
+
+from math import radians, sin, cos, asin, sqrt
+import uuid, random
+
+# stad → centrum (lat, lon)  (kan bytas till dina riktiga centers)
+CITY_CENTERS = {
     "stockholm": (59.334, 18.063),
     "goteborg":  (57.707, 11.967),
     "malmo":     (55.605, 13.003),
 }
 
-REQUIRED = [
-    "id","display_name","alt_names","street","postnummer","ort","kommun","lan","lat","lon","svardighet"
-]
+from pydantic import BaseModel, conint
 
-PLACES: Dict[str, List[Dict]] = {}             # city -> list of places
-PLACE_INDEX: Dict[Tuple[str, int], Dict] = {}  # (city, id) -> place row
+class ScoreIn(BaseModel):
+    name: str
+    score: conint(ge=0)
+    rounds: conint(ge=1, le=50)
+    city: str | None = ""
 
-def load_city(city: str) -> None:
-    city = norm_city(city)
-    if city in PLACES:
-        return
-    csv_path = DATAFILES.get(city)
-    if csv_path is None:
-        raise HTTPException(400, detail=f"Ogiltig stad: {city}")
-    if not csv_path.exists():
-        raise HTTPException(400, detail=f"Saknar fil: {csv_path.name} (lägg den bredvid app.py)")
+@app.post("/api/leaderboard")
+def save_score(s: ScoreIn):
+    ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
+    sql_sqlite = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES (?, ?, ?, ?, ?)"
+    sql_pg     = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES ($1, $2, $3, $4, $5)"
+    _exec(sql_sqlite if not USE_PG else sql_pg,
+          (ts, s.name.strip() or "Anon", int(s.score), int(s.rounds), (s.city or "").strip()))
+    return {"ok": True}
 
-    rows: List[Dict] = []
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-        rdr = csv.DictReader(f)
-        cols = [c.strip() for c in (rdr.fieldnames or [])]
-        missing = [c for c in REQUIRED if c not in cols]
-        if missing:
-            raise HTTPException(500, detail=f"Fel kolumner i {csv_path.name}, saknas: {missing}")
+@app.get("/api/leaderboard")
+def list_scores(limit: int = 50, order: str = "best"):
+    """
+    order=best  -> score ASC (lägst först)
+    order=latest-> created_at DESC
+    """
+    limit = max(1, min(200, int(limit or 50)))
+    if order == "latest":
+        order_clause = "ORDER BY created_at DESC"
+    else:
+        order_clause = "ORDER BY score ASC, created_at ASC"
 
-        for r in rdr:
-            try:
-                rid = int((r.get("id") or "").strip())
-                lat = float((r.get("lat") or "").strip())
-                lon = float((r.get("lon") or "").strip())
-            except Exception:
-                continue
+    rows = _exec(f"SELECT id, created_at, name, score, rounds, city FROM leaderboard {order_clause} LIMIT {limit}")
+    items = []
+    if USE_PG:
+        for r in rows:
+            items.append({"id": r[0], "created_at": str(r[1]), "name": r[2], "score": r[3], "rounds": r[4], "city": r[5]})
+    else:
+        for r in rows:
+            items.append(dict(r))
+    return {"items": items}
 
-            item = {
-                "id": rid,
-                "display_name": (r.get("display_name") or "").strip(),
-                "alt_names": (r.get("alt_names") or "").strip(),
-                "street": (r.get("street") or "").strip(),
-                "postnummer": (r.get("postnummer") or "").replace(" ", "").strip(),
-                "ort": (r.get("ort") or "").strip(),
-                "kommun": (r.get("kommun") or "").strip(),
-                "lan": (r.get("lan") or "").strip(),
-                "lat": lat,
-                "lon": lon,
-                "svardighet": int((r.get("svardighet") or 2)),
-            }
-            rows.append(item)
-            PLACE_INDEX[(city, rid)] = item
 
-    if not rows:
-        raise HTTPException(500, detail=f"Inga giltiga rader i {csv_path.name}")
+# minneskarta: place_id -> {lat,lon,display_name,city}
+PLACES: dict[str, dict] = {}
 
-    PLACES[city] = rows
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = radians(lat2-lat1)
+    dlon = radians(lon2-lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
+    c = 2*asin(sqrt(a))
+    return R*c
 
-# =========================================================
-# Geo & poäng
-# =========================================================
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0088
-    p1, p2 = radians(lat1), radians(lat2)
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(p1) * cos(p2) * sin(dlon/2)**2
-    return 2 * R * asin(sqrt(a))
+def random_point_near(lat, lon, radius_km=6.0):
+    # enkel "cirkel" i km runt centrum
+    # 1 grad lat ≈ 111 km. justera lon med cos(lat)
+    dx = (random.random()*2 - 1) * radius_km
+    dy = (random.random()*2 - 1) * radius_km
+    dlat = dy / 111.0
+    dlon = dx / (111.0 * max(0.2, cos(radians(lat))))  # skydda nära poler
+    return lat + dlat, lon + dlon
 
-def distance_score_km(distance_km: float) -> int:
-    return int(round(distance_km * 100))  # 1.2 km -> 120 p (lägre är bättre)
-
-# =========================================================
-# API (spel)
-# =========================================================
 @app.get("/api/cities")
 def api_cities():
-    return {"cities": [{"key": k, "center": CITY_CENTERS[k]} for k in DATAFILES.keys()]}
+    return {"cities":[{"key":k,"center":{"lat":v[0],"lon":v[1]}} for k,v in CITY_CENTERS.items()]}
 
 @app.get("/api/round")
-def api_round(city: str = Query(..., description="stockholm | goteborg | malmo")):
-    c = norm_city(city)
-    load_city(c)
-    row = random.choice(PLACES[c])
-    return {"place": {
-        "id": row["id"],
-        "display_name": row["display_name"],
-        "street": row["street"],
-        "postnummer": row["postnummer"],
-        "ort": row["ort"],
-        "kommun": row["kommun"],
-        "lan": row["lan"],
-        "lat": row["lat"],
-        "lon": row["lon"],
-    }}
+def api_round(city: str):
+    """
+    Returnerar en plats från CSV för given stad.
+    Ledtråd = display_name (precis som i filen).
+    Skickar även street + address_full om de finns.
+    Faller tillbaka snällt om något saknas.
+    """
+    key = (city or "").lower().strip()
+    rows = CITY_PLACES.get(key) or []
+    if not rows:
+        raise HTTPException(status_code=400, detail=f"Ingen data för staden: {city!r}")
+
+    # Slumpa en rad från CSV
+    row = random.choice(rows)
+
+    # Plocka fält robust
+    try:
+        lat = float(row["lat"])
+        lon = float(row["lon"])
+    except Exception:
+        raise HTTPException(status_code=500, detail="Trasig rad i CSV (lat/lon)")
+
+    display = (row.get("display_name") or "").strip() or "Okänd plats"
+    street  = (row.get("street") or "").strip()
+    postnr  = (row.get("postnummer") or "").strip()
+    ort     = (row.get("ort") or "").strip()
+    address = row.get("address_full") or ", ".join(p for p in [street, postnr, ort] if p) or street or display
+
+    pid = uuid.uuid4().hex
+
+    # Spara facit i minnet för /api/guess/map
+    PLACES[pid] = {
+        "lat": lat, "lon": lon,
+        "display_name": display,   # <- Ledtråd ska vara display_name
+        "clue": display,           # <- clue = display_name
+        "street": street,
+        "address": address,
+        "city": key,
+        "row": row,
+    }
+
+    return {
+        "place": {
+            "id": pid,
+            "lat": lat, "lon": lon,
+            "display_name": display,
+            "clue": display,       # <- frontend kan läsa place.clue
+            "street": street,
+            "address": address
+        }
+    }
+
+
+
+class MapGuess(BaseModel):
+    place_id: str
+    lat: float
+    lon: float
 
 @app.post("/api/guess/map")
-def api_guess_map(city: str = Query(..., description="stockholm | goteborg | malmo"), payload: dict = {}):
-    c = norm_city(city)
-    load_city(c)
-    try:
-        pid = int(payload.get("place_id"))
-        glat = float(payload.get("lat"))
-        glon = float(payload.get("lon"))
-    except Exception:
-        raise HTTPException(400, detail="place_id, lat, lon måste finnas och vara numeriska")
+def api_guess_map(guess: MapGuess, city: str = ""):
+    p = PLACES.get(guess.place_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Place not found")
 
-    row = PLACE_INDEX.get((c, pid))
-    if not row:
-        raise HTTPException(400, detail="Ogiltigt place_id för staden")
+    dist_km = haversine_km(guess.lat, guess.lon, p["lat"], p["lon"])
+    score = int(dist_km * 1000 // 1)
 
-    d_km = haversine_km(glat, glon, row["lat"], row["lon"])
-    score = distance_score_km(d_km)
-    return {"distance_km": round(d_km, 3), "score": score,
-            "solution": {"lat": row["lat"], "lon": row["lon"]}}
+    return {
+        "distance_km": dist_km,
+        "score": score,
+        "solution": {"lat": p["lat"], "lon": p["lon"]},
+        "place": {
+            "id": guess.place_id,
+            "display_name": p["display_name"],
+            "clue": p["clue"],                 # = display_name
+            "street": p.get("street", ""),
+            "address": p.get("address", p.get("street",""))
+        }
+    }
+
 
 # =========================================================
-# Frontend: rendera index.html via templates/
+# Spel-endpoints (enkla stubbar så spelet funkar)
 # =========================================================
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+from math import radians, sin, cos, asin, sqrt
+import uuid, random
+
+CITY_CENTERS = {
+    "stockholm": (59.334, 18.063),
+    "goteborg":  (57.707, 11.967),
+    "malmo":     (55.605, 13.003),
+}
+
+PLACES: dict[str, dict] = {}
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    return R * c
+
+def random_point_near(lat, lon, radius_km=6.0):
+    dx = (random.random()*2 - 1) * radius_km
+    dy = (random.random()*2 - 1) * radius_km
+    dlat = dy / 111.0
+    dlon = dx / (111.0 * max(0.2, cos(radians(lat))))
+    return lat + dlat, lon + dlon
+
+@app.get("/api/cities")
+def api_cities():
+    return {"cities":[{"key":k,"center":{"lat":v[0],"lon":v[1]}} for k,v in CITY_CENTERS.items()]}
+
+@app.get("/api/round")
+def api_round(city: str):
+    key = city.lower().strip()
+    if key not in CITY_PLACES or not CITY_PLACES[key]:
+        raise HTTPException(status_code=400, detail="Ingen data för staden")
+
+    row = random.choice(CITY_PLACES[key])
+    lat = row["lat"]; lon = row["lon"]
+
+    pid = uuid.uuid4().hex
+    clue = build_clue(row)
+    display = row.get("display_name") or clue
+    street  = row.get("street") or ""
+    address = row.get("address_full") or street or display  # säkra fallback
+
+    PLACES[pid] = {
+        "lat": lat, "lon": lon,
+        "display_name": display,
+        "clue": clue,
+        "street": street,
+        "address": address,
+        "city": key,
+        "row": row,
+    }
+
+    return {
+        "place": {
+            "id": pid,
+            "lat": lat, "lon": lon,
+            "display_name": display,
+            "clue": clue,
+            "street": street,
+            "address": address
+        }
+    }
+
+
+class MapGuess(BaseModel):
+    place_id: str
+    lat: float
+    lon: float
+
+@app.post("/api/guess/map")
+def api_guess_map(guess: MapGuess, city: str = ""):
+    p = PLACES.get(guess.place_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    dist_km = haversine_km(guess.lat, guess.lon, p["lat"], p["lon"])
+    score = int(dist_km * 1000 // 1)
+
+    return {
+        "distance_km": dist_km,
+        "score": score,
+        "solution": {"lat": p["lat"], "lon": p["lon"]},
+        "place": {
+            "id": guess.place_id,
+            "display_name": p["display_name"],
+            "clue": p["clue"],
+            "street": p.get("street", ""),
+            "address": p.get("address", p.get("street",""))
+        }
+    }
+
+
+
+# =========================================================
+# Spel-endpoints (CSV-källor)
+# =========================================================
+from math import radians, sin, cos, asin, sqrt
+import uuid, random
+
+# Stad -> center för mapview (kan justeras)
+CITY_CENTERS = {
+    "stockholm": (59.334, 18.063),
+    "goteborg":  (57.707, 11.967),
+    "malmo":     (55.605, 13.003),
+}
+
+# Minneskarta: place_id -> facit
+PLACES: dict[str, dict] = {}
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    return R * c
+
+def build_clue(row: dict) -> str:
+    """
+    Bygg en kort ledtråd av CSV-fält:
+    - street + ort, annars display_name, annars alt_names, annars kommun
+    """
+    street = (row.get("street") or "").strip()
+    ort = (row.get("ort") or "").strip()
+    dn = (row.get("display_name") or "").strip()
+    alt = (row.get("alt_names") or "").strip()
+    kommun = (row.get("kommun") or "").strip()
+
+    if street and ort:
+        return f"Nära {street}, {ort}"
+    if dn:
+        return dn.split(",")[0]
+    if alt:
+        return alt.split(",")[0]
+    if kommun:
+        return f"I {kommun}"
+    return "Okänd plats"
+
+@app.get("/api/cities")
+def api_cities():
+    # Visa bara städer som faktiskt har data
+    items = []
+    for key, rows in CITY_PLACES.items():
+        if rows:
+            c = CITY_CENTERS.get(key, (62.0, 15.0))
+            items.append({"key": key, "center": {"lat": c[0], "lon": c[1]}})
+    return {"cities": items}
+
+@app.get("/api/round")
+def api_round(city: str):
+    key = city.lower().strip()
+    if key not in CITY_PLACES or not CITY_PLACES[key]:
+        raise HTTPException(status_code=400, detail="Ingen data för staden")
+
+    row = random.choice(CITY_PLACES[key])
+    lat = row["lat"]; lon = row["lon"]
+
+    pid = uuid.uuid4().hex
+    clue = build_clue(row)
+    display = row.get("display_name") or clue
+    street = (row.get("street") or "").strip()
+
+    PLACES[pid] = {
+        "lat": lat, "lon": lon,
+        "display_name": display,
+        "clue": clue,
+        "street": street,          # ⬅️ spara street
+        "city": key,
+        "row": row,
+    }
+
+    return {
+        "place": {
+            "id": pid,
+            "lat": lat, "lon": lon,
+            "display_name": display,
+            "clue": clue,
+            "street": street       # ⬅️ skicka street
+        }
+    }
+
+
+class MapGuess(BaseModel):
+    place_id: str
+    lat: float
+    lon: float
+
