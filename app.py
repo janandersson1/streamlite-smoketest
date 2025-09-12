@@ -189,9 +189,9 @@ async def save_feedback(fb: Feedback):
         raise HTTPException(status_code=400, detail="Tomt meddelande")
     ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
     _exec(
-        "INSERT INTO feedback (created_at,name,email,category,message) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO feedback (created_at, name, email, category, message) VALUES (?, ?, ?, ?, ?)"
         if not USE_PG else
-        "INSERT INTO feedback (created_at,name,email,category,message) VALUES ($1,$2,$3,$4,$5)",
+        "INSERT INTO feedback (created_at, name, email, category, message) VALUES (%s, %s, %s, %s, %s)",
         (ts, (fb.name or "").strip(), (fb.email or "").strip(), (fb.category or "Feedback").strip(), msg)
     )
     return {"ok": True}
@@ -256,12 +256,12 @@ def save_score(s: ScoreIn):
         rounds = int(s.rounds)
 
         sql_sqlite = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES (?, ?, ?, ?, ?)"
-        sql_pg     = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES ($1, $2, $3, $4, $5)"
+        sql_pg     = "INSERT INTO leaderboard (created_at, name, score, rounds, city) VALUES (%s, %s, %s, %s, %s)"
         _exec(sql_pg if USE_PG else sql_sqlite, (ts, name, score, rounds, city))
         return {"ok": True}
     except Exception as e:
         print("ERROR save_score:", repr(e), file=sys.stderr)
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail="DB insert failed")
 
 
