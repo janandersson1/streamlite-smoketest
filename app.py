@@ -371,11 +371,12 @@ def api_guess_map(guess: MapGuess, city: str = ""):
         "place": {
             "id": guess.place_id,
             "display_name": p["display_name"],
-            "clue": p["clue"],                 # = display_name
+            "clue": p["clue"],
             "street": p.get("street", ""),
-            "address": p.get("address", p.get("street",""))
+            "address": p.get("address", p.get("street", "")),
         }
     }
+
 
 
 # =========================================================
