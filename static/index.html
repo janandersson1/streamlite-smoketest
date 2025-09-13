@@ -149,6 +149,16 @@
       .toolbar button{ padding:12px 16px;}
     }
 
+    /* runda = live-board i högerspalten */
+    #mpRoundTable td, #mpRoundTable th { white-space: nowrap; }
+    .badge {
+      display:inline-block; padding:2px 8px; border-radius:999px; font-size:.85rem;
+      border:1px solid rgba(255,255,255,.25);
+    }
+    .badge-wait { opacity:.8; }
+    .badge-done { background: rgba(255,255,255,.15); }
+    .badge-timer { background: rgba(255,255,255,.12); }
+
     /* Feedbackform – två kolumner */
     .feedback-form{
       display: grid;
@@ -365,20 +375,25 @@
       </div>
 
       <div id="mp-game" class="card" style="display:none; padding:12px; margin:12px 0; border:1px solid #ddd; border-radius:12px;">
-        <h3>Runda <span id="gRoundNo"></span></h3>
-        <p>Gissa genom att klicka på kartan (eller fyll i lat/lon nedan och tryck Skicka gissning).</p>
+        <h3>Runda <span id="gRoundNo"></span> • Kod <span id="gCode"></span> • <span id="mpTimer" class="badge badge-timer"></span></h3>
 
-        <div id="mapPlaceholder" style="height:260px; background:#f9f9f9; border:1px dashed #ccc; display:flex; align-items:center; justify-content:center; margin-bottom:8px;">
-          <small>(Kartklicken går mot Leaflet-kartan till vänster)</small>
+        <!-- Din statusrad (uppdateras efter klick) -->
+        <div id="mpYou" class="hint" style="margin:6px 0 10px;"></div>
+
+        <!-- Live-leaderboard för aktuell runda -->
+        <div class="table-wrap">
+          <table id="mpRoundTable">
+            <thead>
+              <tr>
+                <th>Spelare</th>
+                <th>Status</th>
+                <th>Avstånd</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
 
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <input id="guessLat" type="number" step="any" placeholder="lat">
-          <input id="guessLon" type="number" step="any" placeholder="lon">
-          <button id="btnSendGuess">Skicka gissning</button>
-        </div>
-
-        <div id="roundResult" style="margin-top:12px;"></div>
         <div style="margin-top:12px;">
           <button id="btnNextRound" style="display:none;">Nästa runda</button>
           <button id="btnFinal" style="display:none;">Visa slutresultat</button>
@@ -436,7 +451,7 @@
   const cityCenters = {};
   let place = null;
   let guessMarker = null, trueMarker = null, line = null;
-  let locked = true;           // låser singleplayerklick under utvärdering
+  let locked = true;
   let roundNo = 0;
   let roundFinished = false;
   const rounds = [];
@@ -783,7 +798,95 @@
   });
 </script>
 
-<!-- Multiplayer sist (använder redan window.map och showTab) -->
+<!-- Multiplayer (ny fil med låsning & timer) -->
 <script src="/static/js/multiplayer.js"></script>
+
+<!-- Koppling: create/join/start ↔ API ↔ Utmana -->
+<script>
+(function(){
+  const authBox   = document.getElementById('mp-auth');
+  const lobbyBox  = document.getElementById('mp-lobby');
+  const codeEl    = document.getElementById('lbCode');
+  const cityEl    = document.getElementById('lbCity');
+  const roundsEl  = document.getElementById('lbRounds');
+  const statusEl  = document.getElementById('lbStatus');
+  const playersUl = document.getElementById('lbPlayers');
+  const btnStart  = document.getElementById('btnStart');
+
+  async function refreshLobbyUI(code){
+    try{
+      const j = await fetch(`/api/match/lobby?code=${encodeURIComponent(code)}`).then(r=>r.json());
+      if(!j) return;
+      codeEl.textContent   = code;
+      cityEl.textContent   = (j.city||'').charAt(0).toUpperCase() + (j.city||'').slice(1);
+      roundsEl.textContent = j.rounds ?? '';
+      statusEl.textContent = j.status ?? '';
+      playersUl.innerHTML  = (j.players||[]).map(n=>`<li>${n}</li>`).join('');
+    }catch{}
+  }
+
+  // CREATE (värd)
+  document.getElementById('formCreate')?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const host   = document.getElementById('hostName').value.trim();
+    const city   = document.getElementById('hostCity').value;
+    const rounds = parseInt(document.getElementById('hostRounds').value,10) || 5;
+
+    const res = await fetch('/api/match/create',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({host_name:host, city, rounds})
+    });
+    if(!res.ok){ alert(await res.text()); return; }
+    const j = await res.json();
+
+    window.Utmana.setSession({code:j.code, city:j.city, rounds:j.rounds, nickname:host});
+    window.__mp_code = j.code;
+
+    authBox.style.display='none';
+    lobbyBox.style.display='block';
+    btnStart.style.display='inline-block';
+    showTab('utmana');
+    await refreshLobbyUI(j.code);
+  });
+
+  // JOIN (spelare)
+  document.getElementById('formJoin')?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const code = document.getElementById('joinCode').value.trim();
+    const nick = document.getElementById('joinNick').value.trim() || 'Guest';
+
+    const res = await fetch('/api/match/join',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({code, nickname:nick})
+    });
+    if(!res.ok){ alert(await res.text()); return; }
+
+    const lob = await fetch(`/api/match/lobby?code=${encodeURIComponent(code)}`).then(r=>r.json());
+    window.Utmana.setSession({code, city: lob.city, rounds: lob.rounds, nickname:nick});
+    window.__mp_code = code;
+
+    authBox.style.display='none';
+    lobbyBox.style.display='block';
+    btnStart.style.display='none'; // endast värd
+    showTab('utmana');
+    await refreshLobbyUI(code);
+  });
+
+  // START (värden trycker)
+  btnStart?.addEventListener('click', async ()=>{
+    if(!window.__mp_code) return;
+    const r = await fetch(`/api/match/start?code=${encodeURIComponent(window.__mp_code)}`, {method:'POST'});
+    if(!r.ok){ alert(await r.text()); return; }
+    statusEl.textContent = 'active';
+    lobbyBox.style.display='none';
+    await window.Utmana.enterRound();
+  });
+
+  // Om man öppnar Utmana utan kod – gör inget; har man kod → uppdatera lobby
+  document.getElementById('navUtmana')?.addEventListener('click', ()=>{
+    if(window.__mp_code) refreshLobbyUI(window.__mp_code);
+  });
+})();
+</script>
 </body>
 </html>
