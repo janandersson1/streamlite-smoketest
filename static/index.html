@@ -251,6 +251,7 @@ table{
     <div>Geoguessr - The Nabo Way</div>
     <nav>
       <button id="tabPlay" class="active">Spela</button>
+      <button id="navUtmana" class="active">Utmana</button>
       <button id="tabBoard">Leaderboard</button>
       <button id="tabAbout">Om</button>
     </nav>
@@ -380,6 +381,90 @@ table{
         <li>Bäst av 5</li>
       </ul>
     </section>
+
+<section id="view-utmana" style="display:none; max-width:900px; margin:0 auto;">
+  <h2>Utmana</h2>
+
+  <div id="mp-auth" class="card" style="padding:12px; margin:12px 0; border:1px solid #ddd; border-radius:12px;">
+    <h3>Skapa spel</h3>
+    <form id="formCreate" style="display:grid; gap:8px; grid-template-columns:1fr 1fr 1fr; align-items:end;">
+      <div>
+        <label>Värd (namn)</label>
+        <input id="hostName" type="text" placeholder="Ditt namn" required>
+      </div>
+      <div>
+        <label>Stad</label>
+        <select id="hostCity">
+          <option value="stockholm">Stockholm</option>
+          <option value="goteborg">Göteborg</option>
+          <option value="malmo">Malmö</option>
+        </select>
+      </div>
+      <div>
+        <label>Antal rundor</label>
+        <input id="hostRounds" type="number" min="1" max="20" value="5">
+      </div>
+      <button type="submit">Skapa</button>
+    </form>
+
+    <hr style="margin:16px 0">
+
+    <h3>Anslut till spel</h3>
+    <form id="formJoin" style="display:grid; gap:8px; grid-template-columns:1fr 1fr 1fr; align-items:end;">
+      <div>
+        <label>Kod (3 siffror)</label>
+        <input id="joinCode" type="text" maxlength="3" placeholder="123" required>
+      </div>
+      <div>
+        <label>Nickname</label>
+        <input id="joinNick" type="text" placeholder="Ditt namn" required>
+      </div>
+      <button type="submit">Anslut</button>
+    </form>
+  </div>
+
+  <div id="mp-lobby" class="card" style="display:none; padding:12px; margin:12px 0; border:1px solid #ddd; border-radius:12px;">
+    <h3>Lobby – kod <span id="lbCode"></span></h3>
+    <p>Stad: <b id="lbCity"></b> • Rundor: <b id="lbRounds"></b> • Status: <b id="lbStatus"></b></p>
+    <div>
+      <h4>Spelare</h4>
+      <ul id="lbPlayers" style="margin:0; padding-left:18px;"></ul>
+    </div>
+    <button id="btnStart" style="margin-top:8px; display:none;">Starta spel</button>
+  </div>
+
+  <div id="mp-game" class="card" style="display:none; padding:12px; margin:12px 0; border:1px solid #ddd; border-radius:12px;">
+    <h3>Runda <span id="gRoundNo"></span></h3>
+    <p>Gissa genom att klicka på kartan (eller fyll i lat/lon nedan och tryck Skicka gissning).</p>
+
+    <!-- Om du redan har karta: denna placeholder kan ligga tom.
+         multiplayer.js exponerar window.onMapClick(lat,lon) som du anropar från din befintliga kart-hanterare. -->
+    <div id="mapPlaceholder" style="height:260px; background:#f9f9f9; border:1px dashed #ccc; display:flex; align-items:center; justify-content:center; margin-bottom:8px;">
+      <small>(Här kan din kartkomponent renderas)</small>
+    </div>
+
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input id="guessLat" type="number" step="any" placeholder="lat">
+      <input id="guessLon" type="number" step="any" placeholder="lon">
+      <button id="btnSendGuess">Skicka gissning</button>
+    </div>
+
+    <div id="roundResult" style="margin-top:12px;"></div>
+    <div style="margin-top:12px;">
+      <button id="btnNextRound" style="display:none;">Nästa runda</button>
+      <button id="btnFinal" style="display:none;">Visa slutresultat</button>
+    </div>
+  </div>
+
+  <div id="mp-final" class="card" style="display:none; padding:12px; margin:12px 0; border:1px solid #ddd; border-radius:12px;">
+    <h3>Slutresultat</h3>
+    <ol id="finalBoard" style="padding-left:18px;"></ol>
+  </div>
+</section>
+
+<!-- lägg sist i body (efter din övriga JS) -->
+<script src="/static/js/multiplayer.js"></script>
+
   </div>
 </div>
 
@@ -436,6 +521,13 @@ table{
   // ======= Map =======
   const map = L.map('map').setView([62.0, 15.0], 5);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+// --- Multiplayer: skicka klick till spelet ---
+map.on('click', (e) => {
+  if (window.onMapClick) {
+    window.onMapClick(e.latlng.lat, e.latlng.lng);
+  }
+});
 
   // ======= City centers =======
   fetch('/api/cities').then(r=>r.json()).then(j=>{
