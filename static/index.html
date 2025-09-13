@@ -210,6 +210,43 @@
 /* Mindre badges så kolumnen blir kompakt */
 .badge{ padding: 2px 8px; font-size: .8rem; }
 
+/* ===== Utmana – kompakt enkelkolumn ===== */
+:root { --mp-form-w: 280px; }     /* ändra här om du vill ha 260/300/320px */
+
+#view-utmana .card{
+  background: transparent;
+  border: 0 !important;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* Själva formulären i Utmana ska vara smala och vänsterställda */
+#view-utmana .form-vertical{
+  width: var(--mp-form-w);
+  max-width: 100%;
+}
+#view-utmana .form-vertical .row,
+#view-utmana .form-vertical input,
+#view-utmana .form-vertical select,
+#view-utmana .form-vertical button{
+  width: 100%;
+}
+#view-utmana hr{
+  width: var(--mp-form-w);
+  margin-left: 0;
+}
+
+/* Rubriker vänster */
+#view-utmana h3{ text-align:left; margin: 0 0 10px; }
+
+/* Tabell för rundan – vänsterställt, smal status, avstånd får plats */
+#mpRoundTable{ table-layout:auto; }
+#mpRoundTable th, #mpRoundTable td{ text-align:left; white-space:nowrap; }
+#mpRoundTable col.col-status   { width: 90px; }
+#mpRoundTable col.col-distance { width: 140px; }
+.badge{ padding:2px 8px; font-size:.8rem; } /* gör status-chip mindre */
+
+
   </style>
 </head>
 <body>
@@ -320,7 +357,6 @@
 
     <!-- ===== Multiplayer-panel ===== -->
     <section id="view-utmana" style="display:none; max-width:900px; margin:0 auto;">
-      <h2>Utmana</h2>
 
       <div id="mp-auth" class="card" style="padding:12px; margin:12px 0; border:1px solid #ddd; border-radius:12px;">
         <h3 style="margin-top:0;">Skapa spel</h3>
@@ -393,6 +429,7 @@
   </thead>
   <tbody></tbody>
 </table>
+
 
         </div>
 
