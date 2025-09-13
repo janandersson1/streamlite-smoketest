@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Geoguessr - The Nabo Way</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-
   <!-- Preload NeoSansPro -->
   <link rel="preload" href="/static/fonts/NeoSansPro-Regular.woff2" as="font" type="font/woff2" crossorigin>
-
   <style>
     :root{
       --brand-600: #5e725e;
@@ -26,10 +24,8 @@
       font-style: normal;
       font-display: swap;
     }
-
     html, body, #app { height: 100%; margin: 0; }
     body { font-family: var(--font-body); background: var(--beige); }
-
     /* Layout */
     #app {
       display: grid;
@@ -42,10 +38,8 @@
     @media (max-width: 900px){
       #app { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
     }
-
     #playCol { grid-column: 1 / 2; }
     #sideCol { grid-column: 2 / 3; }
-
     header{
       grid-column:1/3; display:flex; justify-content:space-between; align-items:center;
       padding:10px 14px; background: var(--brand-700); color: var(--beige);
@@ -53,14 +47,12 @@
     }
     header nav button{ background:transparent; border:0; color:var(--beige); padding:8px 12px; border-radius:8px; min-height:40px; }
     header nav button.active{ background: rgba(255,255,255,.1); }
-
     /* Karta och panel */
     #map{ height: calc(100dvh - 52px); }
     .panel{ background: var(--brand-700); color: var(--beige); height: calc(100dvh - 52px); overflow:auto; }
     .box{ padding:14px 16px; border-bottom: 1px solid rgba(255,255,255,.1); }
     .panel .box + .box{ margin-top: clamp(10px, 2vw, 18px); }
     .hint{ color: var(--txt-muted); }
-
     /* Infoboxen över kartan */
     .float-info{
       position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
@@ -82,7 +74,6 @@
       background: transparent; border:1px solid rgba(255,255,255,.55); color: var(--beige);
       padding:12px 18px; border-radius:10px; cursor:pointer; min-height:44px;
     }
-
     /* Overlay: välj stad */
     .overlay{ position: fixed; inset:0; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,.9); z-index: 6000; }
     .card{
@@ -99,22 +90,13 @@
       font-size: clamp(18px,2.6vw,24px); border-bottom: 2px solid rgba(255,255,255,.25);
       display:inline-block; padding-bottom:.25rem; margin: 0 0 clamp(20px,2.6vw,32px);
     }
-
-    .rules ul {
-      list-style: none; padding: 0; margin: 0; text-align: center;
-      display: flex; justify-content: center; gap: 28px;
-    }
+    .rules ul { list-style: none; padding: 0; margin: 0; text-align: center; display: flex; justify-content: center; gap: 28px; }
     .rules li { display:flex; align-items:center; font-size:1.2em; gap:8px; }
     .rules li::before { content:"•"; color:var(--beige); font-size:1.4em; line-height:1; }
-
     /* Stadskort */
-    .city-grid{
-      display:grid; grid-template-columns: repeat(3, minmax(0,1fr));
-      gap: clamp(14px,2.6vw,32px); justify-items:center; margin: 0 0 clamp(24px,3vw,40px);
-    }
+    .city-grid{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: clamp(14px,2.6vw,32px); justify-items:center; margin: 0 0 clamp(24px,3vw,40px); }
     @media (max-width: 900px){ .city-grid{ grid-template-columns: repeat(2,1fr);} }
     @media (max-width: 560px){ .city-grid{ grid-template-columns: 1fr;} }
-
     .city-card{
       width:min(260px,84vw);
       background: rgba(255,255,255,.08);
@@ -133,13 +115,11 @@
     }
     .city-logo{ height:150px; width:auto; object-fit:contain; filter: drop-shadow(0 2px 4px rgba(0,0,0,.22)); }
     .city-name{ font-weight:600; font-size: clamp(15px,2.6vw,18px); margin-top:6px; }
-
     /* Tabeller */
     .table-wrap{ width:100%; overflow:auto; -webkit-overflow-scrolling: touch; }
     table{ width:100%; border-collapse: collapse; color: var(--beige); min-width: 560px; }
     th,td{ border-bottom:1px solid rgba(255,255,255,.1); padding:8px 6px; text-align:left; }
     th{ background: var(--brand-800); }
-
     /* Mobil */
     @media (max-width: 900px){
       #map{ height: 58svh; }
@@ -148,17 +128,12 @@
       .toolbar{ gap:12px;}
       .toolbar button{ padding:12px 16px;}
     }
-
     /* runda = live-board i högerspalten */
     #mpRoundTable td, #mpRoundTable th { white-space: nowrap; }
-    .badge {
-      display:inline-block; padding:2px 8px; border-radius:999px; font-size:.85rem;
-      border:1px solid rgba(255,255,255,.25);
-    }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.85rem; border:1px solid rgba(255,255,255,.25); }
     .badge-wait { opacity:.8; }
     .badge-done { background: rgba(255,255,255,.15); }
     .badge-timer { background: rgba(255,255,255,.12); }
-
     /* Feedbackform – två kolumner */
     .feedback-form{
       display: grid;
@@ -173,34 +148,14 @@
     .feedback-form textarea{ width: 100%; }
     .feedback-form .btn-primary{ grid-column: 2; justify-self: start; }
     .feedback-form .mailto-fallback{ grid-column: 2; }
-
     /* Små telefoner */
     @media (max-width: 430px) {
-      .overlay{
-        align-items: flex-start;
-        padding-top: calc(12px + env(safe-area-inset-top));
-        overflow: auto;
-      }
-      .card{
-        width: 100vw;
-        max-width: none;
-        max-height: 100dvh;
-        overflow: auto;
-        border-radius: 0;
-        padding: 16px 14px;
-      }
+      .overlay{ align-items: flex-start; padding-top: calc(12px + env(safe-area-inset-top)); overflow: auto; }
+      .card{ width: 100vw; max-width: none; max-height: 100dvh; overflow: auto; border-radius: 0; padding: 16px 14px; }
       .brand-title{ font-size: 22px; margin-bottom: 10px; }
       .subtitle{ font-size: 18px; margin-bottom: 12px; }
-      .city-grid{
-        grid-template-columns: 1fr;
-        gap: 12px;
-        margin-bottom: 14px;
-      }
-      .city-card{
-        width: 60vw;
-        padding: 14px 12px 16px;
-        border-radius: 14px;
-      }
+      .city-grid{ grid-template-columns: 1fr; gap: 12px; margin-bottom: 14px; }
+      .city-card{ width: 60vw; padding: 14px 12px 16px; border-radius: 14px; }
       .city-logo{ height: 90px; }
       .city-name{ font-size: 1rem; }
       .rules .lead{ margin: 0 0 6px; font-size: 1rem; }
@@ -210,6 +165,19 @@
     @media (max-width: 560px){
       .city-card{ width: 80vw; }
       .city-logo{ height: 120px; }
+    }
+    .form-vertical{ display:grid; gap:10px; }
+    .form-vertical .row{ display:flex; flex-direction:column; gap:6px; }
+    .form-vertical label{ font-weight:600; }
+    .form-vertical input,
+    .form-vertical select{
+      padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.35);
+      background: rgba(255,255,255,.06); color: var(--beige);
+    }
+    .form-vertical button{
+      justify-self:start; padding:10px 16px; border-radius:10px;
+      border:1px solid rgba(255,255,255,.55); background: transparent; color: var(--beige);
+      cursor:pointer; min-height:40px;
     }
   </style>
 </head>
@@ -228,7 +196,6 @@
   <!-- Vänster (karta + infobox) -->
   <div id="playCol">
     <div id="map"></div>
-
     <div class="float-info">
       <div id="clue" class="clue">Ledtråd: –</div>
       <div class="toolbar">
@@ -241,7 +208,6 @@
 
   <!-- Höger panel -->
   <aside class="panel" id="sideCol">
-
     <!-- ===== Singleplayer-panel ===== -->
     <section id="view-play">
       <div class="box" id="roundsBox">
@@ -284,7 +250,6 @@
 
     <!-- ===== Om ===== -->
     <div class="box" id="aboutBox" style="display:none;">
-      <div><strong>Om</strong></div>
       <section>
         <h3 style="margin:10px 0 6px;">Release notes</h3>
         <ul class="release-notes" id="relList"></ul>
@@ -327,22 +292,22 @@
       <h2>Utmana</h2>
 
       <div id="mp-auth" class="card" style="padding:12px; margin:12px 0; border:1px solid #ddd; border-radius:12px;">
-        <h3>Skapa spel</h3>
-        <form id="formCreate" style="display:grid; gap:8px; grid-template-columns:1fr 1fr 1fr; align-items:end;">
-          <div>
-            <label>Värd (namn)</label>
+        <h3 style="margin-top:0;">Skapa spel</h3>
+        <form id="formCreate" class="form-vertical">
+          <div class="row">
+            <label for="hostName">Namn</label>
             <input id="hostName" type="text" placeholder="Ditt namn" required>
           </div>
-          <div>
-            <label>Stad</label>
+          <div class="row">
+            <label for="hostCity">Spelstad</label>
             <select id="hostCity">
               <option value="stockholm">Stockholm</option>
               <option value="goteborg">Göteborg</option>
               <option value="malmo">Malmö</option>
             </select>
           </div>
-          <div>
-            <label>Antal rundor</label>
+          <div class="row">
+            <label for="hostRounds">Antal rundor</label>
             <input id="hostRounds" type="number" min="1" max="20" value="5">
           </div>
           <button type="submit">Skapa</button>
@@ -351,13 +316,13 @@
         <hr style="margin:16px 0">
 
         <h3>Anslut till spel</h3>
-        <form id="formJoin" style="display:grid; gap:8px; grid-template-columns:1fr 1fr 1fr; align-items:end;">
-          <div>
-            <label>Kod (3 siffror)</label>
+        <form id="formJoin" class="form-vertical">
+          <div class="row">
+            <label for="joinCode">Kod</label>
             <input id="joinCode" type="text" maxlength="3" placeholder="123" required>
           </div>
-          <div>
-            <label>Nickname</label>
+          <div class="row">
+            <label for="joinNick">Namn</label>
             <input id="joinNick" type="text" placeholder="Ditt namn" required>
           </div>
           <button type="submit">Anslut</button>
@@ -413,7 +378,6 @@
   <div class="card">
     <div class="brand-title">GEOGUESSR - THE NABO WAY</div>
     <h1 class="subtitle">VÄLJ STAD</h1>
-
     <section class="city-grid">
       <div class="city-card" role="button" tabindex="0" aria-label="Stockholm" data-city="stockholm">
         <img class="city-logo" src="/static/img/stockholm.png" alt="Stockholm">
@@ -428,7 +392,6 @@
         <span class="city-name">Malmö</span>
       </div>
     </section>
-
     <section class="rules">
       <p class="lead">Reglerna är enkla</p>
       <ul>
@@ -580,9 +543,10 @@
       place = data.place;
       roundNo += 1;
 
-      const text = (place.clue && place.clue.trim()) || (place.display_name || '').split(',')[0] || '';
+      // Ledtråd = display_name
+      const clueTxt = (place.display_name || '').trim();
       const clueEl = document.getElementById('clue');
-      if (clueEl) clueEl.textContent = `Ledtråd: ${text}`;
+      if (clueEl) clueEl.textContent = `Ledtråd: ${clueTxt}`;
 
       const info = document.getElementById('info');
       if (info) info.textContent = 'Klicka på kartan för att gissa.';
@@ -623,7 +587,8 @@
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${roundNo}</td>
-          <td>${escapeHtml(place.clue || (place.display_name || '').split(',')[0] || '')}</td>
+          <!-- ÄNDRAT: visa display_name i tabellen -->
+          <td>${escapeHtml(place.display_name || '')}</td>
           <td>${data.distance_km.toFixed(2)} km</td>
           <td>${(data.distance_km*1000).toFixed(0)} m</td>
           <td>${data.score}</td>`;
@@ -638,9 +603,10 @@
       const info = document.getElementById('info');
       if (info) {
         const kvar = ROUNDS_TOTAL - roundNo;
+        // Svar = street i första hand, annars address/display_name
         const rightAddress =
+          (data.place?.street && data.place.street.trim()) ||
           (data.place?.address && data.place.address.trim()) ||
-          (data.place?.street && data.place.street.trim())   ||
           (data.place?.display_name || '');
 
         info.innerHTML =
@@ -696,16 +662,9 @@
     }
     const name = (prompt("Spelet slut! Skriv ditt namn för leaderboard:", "") || "Anon").trim();
     try {
-      const payload = {
-        name,
-        score: total,
-        rounds: (rounds||[]).length,
-        city: selectedCity || ""
-      };
+      const payload = { name, score: total, rounds: (rounds||[]).length, city: selectedCity || "" };
       const res = await fetch('/api/leaderboard', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json' },
-        body: JSON.stringify(payload)
+        method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error(await res.text());
 
@@ -723,7 +682,6 @@
 
   // ======= Tabs =======
   function showTab(tab){
-    // visa/hide paneler
     const vPlay   = document.getElementById('view-play');
     const vBoard  = document.getElementById('boardBox');
     const vAbout  = document.getElementById('aboutBox');
@@ -734,17 +692,15 @@
     if (vAbout)  vAbout.style.display  = (tab === 'about')  ? '' : 'none';
     if (vUtmana) vUtmana.style.display = (tab === 'utmana') ? '' : 'none';
 
-    // nav aktiv
     document.getElementById('tabPlay') ?.classList.toggle('active', tab==='play');
     document.getElementById('navUtmana')?.classList.toggle('active', tab==='utmana');
     document.getElementById('tabBoard')?.classList.toggle('active', tab==='board');
     document.getElementById('tabAbout')?.classList.toggle('active', tab==='about');
 
-    // styr kartklick till multiplayer eller single
     window.__MP_ACTIVE__ = (tab === 'utmana');
 
-    // ladda data vid behov
     if (tab === 'board') refreshLeaderboard();
+    if (tab === 'about') renderReleaseNotes();
   }
 
   // Nav-knappar
@@ -783,9 +739,7 @@
       }
       try{
         const res = await fetch('/api/feedback', {
-          method: 'POST',
-          headers: { 'Content-Type':'application/json' },
-          body: JSON.stringify(payload)
+          method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(payload)
         });
         if (!res.ok) throw new Error(await res.text());
         alert('Tack! Din synpunkt är sparad.');
@@ -796,6 +750,54 @@
       }
     });
   });
+
+  // ======= Release notes (din gamla lista) =======
+  const RELEASE_NOTES = [
+    {
+      version: "v1.2.0",
+      date: "2025-09-12",
+      items: [
+        "Om-funktion tillagd i menyn.",
+        "Formulär för feedback sparar synpunkter i fil.",
+        "Förbättrad responsiv design för paneler och tabeller."
+      ]
+    },
+    {
+      version: "v1.1.0",
+      date: "2025-09-11",
+      items: [
+        "Publicerad online för första gången.",
+        "Malmö och Göteborg tillagda som spelbara städer.",
+        "Leaderboard tillagd för sparade resultat."
+      ]
+    },
+    {
+      version: "v1.0.0",
+      date: "2025-09-10",
+      items: [
+        "Första spadtaget – grundlayout, karta och spelmekanik."
+      ]
+    }
+  ];
+
+  // ======= Rendera "Om" =======
+  function renderReleaseNotes(){
+    const ul = document.getElementById('relList');
+    if (!ul) return;
+    ul.innerHTML = (RELEASE_NOTES||[]).map(r => {
+      const pts = (r.items||[]).map(t => `<li>${escapeHtml(t)}</li>`).join('');
+      return `
+        <li class="version-item">
+          <div class="version-row" style="display:flex;gap:10px;align-items:center;justify-content:space-between;">
+            <span class="version" style="font-weight:600;">${escapeHtml(r.version||'')}</span>
+            <span class="date" style="opacity:.9;">${escapeHtml(r.date||'')}</span>
+          </div>
+          ${pts ? `<ul class="changelog" style="margin:.35rem 0 0 .8rem;">${pts}</ul>` : ''}
+        </li>`;
+    }).join('');
+  }
+
+  document.addEventListener('DOMContentLoaded', renderReleaseNotes);
 </script>
 
 <!-- Multiplayer (ny fil med låsning & timer) -->
@@ -882,7 +884,6 @@
     await window.Utmana.enterRound();
   });
 
-  // Om man öppnar Utmana utan kod – gör inget; har man kod → uppdatera lobby
   document.getElementById('navUtmana')?.addEventListener('click', ()=>{
     if(window.__mp_code) refreshLobbyUI(window.__mp_code);
   });
