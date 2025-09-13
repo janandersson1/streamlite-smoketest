@@ -1,17 +1,15 @@
-import csv, os, random, datetime, sqlite3
+# === Standard imports ===
+import os, csv, random, datetime, sqlite3
 from pathlib import Path
-
-# ==== REN FASTAPI-DEL (ersätter all Flask-användning) ====
-from __future__ import annotations
-import os, sqlite3
 from contextlib import contextmanager
-from pathlib import Path
+
+# === FastAPI ===
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 app = FastAPI(title="Geoguessr - The Nabo Way (API)")
 
-# --- DB setup (återanvänder dina variabler om de redan finns) ---
+# === DB setup ===
 APP_DIR = Path(__file__).parent.resolve()
 SQLITE_PATH = APP_DIR / "app.db"
 
