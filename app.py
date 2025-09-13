@@ -320,16 +320,8 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * R * asin(sqrt(a))
 
 def build_clue(row: dict) -> str:
-    street = (row.get("street") or "").strip()
-    ort = (row.get("ort") or "").strip()
-    dn = (row.get("display_name") or "").strip()
-    alt = (row.get("alt_names") or "").strip()
-    kommun = (row.get("kommun") or "").strip()
-    if street and ort: return f"Nära {street}, {ort}"
-    if dn: return dn.split(",")[0]
-    if alt: return alt.split(",")[0]
-    if kommun: return f"I {kommun}"
-    return "Okänd plats"
+    # Ledtråd = display_name, inget annat
+    return (row.get("display_name") or "").strip() or "Okänd plats"
 
 @app.get("/api/cities")
 def api_cities():
