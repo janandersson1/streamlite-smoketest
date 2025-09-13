@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import csv, os, random, datetime, sqlite3
 from pathlib import Path
 
