@@ -109,7 +109,6 @@ async function enterLobby(){
 async function enterRound(){
   clearInterval(S.pollTimer);
   clearInterval(S.countdownTimer);
-
   S.hasGuessed = false;
   S.myGuess = null;
   setMapLocked(false);
@@ -120,21 +119,15 @@ async function enterRound(){
 
   gRoundNo.textContent = S.roundNo;
   gCode.textContent    = S.code;
-
-  // Hämta/aktivera rundan (backend väljer plats men visar ej facit)
-  // ⬇️ NYTT: vi läser svaret och sätter ledtrådstexten
-  let roundData = null;
-  try{
-    roundData = await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
-  }catch(e){
-    // även om detta faller, låt spelet gå vidare (men utan ledtråd)
-  }
-
-  const clueTxt = (roundData?.place?.display_name || roundData?.place?.clue || '').trim();
-  if($('#clue')) $('#clue').textContent = `Ledtråd: ${clueTxt || '—'}`;
-
-  mpYou.textContent = 'Klicka på kartan för att gissa.';
+  mpYou.textContent    = 'Klicka på kartan för att gissa.';
   if($('#info')) $('#info').textContent = 'Klicka på kartan för att gissa.';
+
+  // HÄMTA rundadata & sätt ledtråd
+  const r = await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
+  const clue = r?.round?.clue || '';
+  if (document.getElementById('clue')) {
+    document.getElementById('clue').textContent = `Ledtråd: ${clue}`;
+  }
 
   renderRoundBoard([]);
 
@@ -265,12 +258,17 @@ async function showSolutionAndButtons(res){
     }catch{}
     if($('#info') && S.myGuess){
       const dkm = haversineKm(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon);
-      $('#info').innerHTML = `<strong>Avstånd:</strong> ${dkm.toFixed(2)} km · <strong>Rätt plats</strong> markerad på kartan.`;
+      const addr = (sol.address || '').trim();
+      $('#info').innerHTML =
+        `<strong>Avstånd:</strong> ${dkm.toFixed(2)} km` +
+        (addr ? ` · <strong>Rätt adress:</strong> ${esc(addr)}` : '') +
+        `.`;
     }
   }
   btnNextRound.style.display = (S.roundNo < S.rounds) ? 'inline-block' : 'none';
   btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
 }
+
 
 // ===== Knappar =====
 btnNextRound?.addEventListener('click', async ()=>{
