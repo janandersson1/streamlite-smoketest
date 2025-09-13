@@ -5,7 +5,7 @@
 
   // Views
   const vUtmana = view('view-utmana');
-  const navUtmana = view('navUtmana');
+const navUtmana = view('tabUtmana');
 
   // Forms & fields
   const formCreate = view('formCreate');
