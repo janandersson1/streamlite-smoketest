@@ -3,44 +3,64 @@
   const view = id => document.getElementById(id);
   const $ = sel => document.querySelector(sel);
 
-  // Views
-  const vUtmana = view('view-utmana');
-const navUtmana = view('tabUtmana');
+  // ======= Meny & vyer =======
+  const tabPlay    = view('tabPlay');        // Spela-knappen
+  const navUtmana  = view('navUtmana');      // Utmana-knappen
+  const vPlay      = view('view-play');      // Singleplayer-vy (måste finnas i HTML)
+  const vUtmana    = view('view-utmana');    // Multiplayer-vy (måste finnas i HTML)
 
-  // Forms & fields
+  // Multiplayer-vyns element
+  const vAuth      = view('mp-auth');
   const formCreate = view('formCreate');
-  const hostName = view('hostName');
-  const hostCity = view('hostCity');
+  const hostName   = view('hostName');
+  const hostCity   = view('hostCity');
   const hostRounds = view('hostRounds');
 
-  const formJoin = view('formJoin');
-  const joinCode = view('joinCode');
-  const joinNick = view('joinNick');
+  const formJoin   = view('formJoin');
+  const joinCode   = view('joinCode');
+  const joinNick   = view('joinNick');
 
-  // Lobby
-  const vLobby = view('mp-lobby');
-  const lbCode = view('lbCode');
-  const lbCity = view('lbCity');
-  const lbRounds = view('lbRounds');
-  const lbStatus = view('lbStatus');
-  const lbPlayers = view('lbPlayers');
-  const btnStart = view('btnStart');
+  const vLobby     = view('mp-lobby');
+  const lbCode     = view('lbCode');
+  const lbCity     = view('lbCity');
+  const lbRounds   = view('lbRounds');
+  const lbStatus   = view('lbStatus');
+  const lbPlayers  = view('lbPlayers');
+  const btnStart   = view('btnStart');
 
-  // Game
-  const vGame = view('mp-game');
-  const gRoundNo = view('gRoundNo');
-  const guessLat = view('guessLat');
-  const guessLon = view('guessLon');
+  const vGame      = view('mp-game');
+  const gRoundNo   = view('gRoundNo');
+  const guessLat   = view('guessLat');
+  const guessLon   = view('guessLon');
   const btnSendGuess = view('btnSendGuess');
-  const roundResult = view('roundResult');
+  const roundResult  = view('roundResult');
   const btnNextRound = view('btnNextRound');
-  const btnFinal = view('btnFinal');
+  const btnFinal     = view('btnFinal');
 
-  // Final
-  const vFinal = view('mp-final');
+  const vFinal     = view('mp-final');
   const finalBoard = view('finalBoard');
 
-  // Global state
+  // ======= Flik-toggling =======
+  function showOnly(sectionId) {
+    document.querySelectorAll('section[id^="view"]').forEach(el => (el.style.display = 'none'));
+    const v = document.getElementById(sectionId);
+    if (v) v.style.display = 'block';
+  }
+  function setActive(btn) {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  tabPlay?.addEventListener('click', () => {
+    setActive(tabPlay);
+    showOnly('view-play');
+  });
+  navUtmana?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setActive(navUtmana);
+    showOnly('view-utmana');
+  });
+
+  // ======= Globalt MP-state =======
   const S = {
     code: null,
     nickname: null,
@@ -50,38 +70,64 @@ const navUtmana = view('tabUtmana');
     isHost: false,
     lobbyTimer: null
   };
+  window._mpState = S; // tillgängligt för andra script vid behov
 
-  // Simple router: show only Utmana view
-  function showUtmana() {
-    // göm alla dina andra views om du har; här visar vi bara denna
-    document.querySelectorAll('section[id^="view"]').forEach(el => el.style.display = 'none');
-    vUtmana.style.display = 'block';
-    // startläge: auth synlig, andra dolda
-    view('mp-auth').style.display = 'block';
-    vLobby.style.display = 'none';
-    vGame.style.display = 'none';
-    vFinal.style.display = 'none';
+  // ======= Leaflet-lager & helpers =======
+  let guessLayer = null;
+  let solutionLayer = null;
+  let lineLayer = null;
+  let myLastGuess = null; // [lat, lon]
+
+  function ensureLayers() {
+    if (!window.L || !window.map) return false;
+    if (!guessLayer)    guessLayer    = L.layerGroup().addTo(window.map);
+    if (!solutionLayer) solutionLayer = L.layerGroup().addTo(window.map);
+    if (!lineLayer)     lineLayer     = L.layerGroup().addTo(window.map);
+    return true;
+  }
+  function clearRoundLayers() {
+    myLastGuess = null;
+    if (guessLayer) guessLayer.clearLayers();
+    if (solutionLayer) solutionLayer.clearLayers();
+    if (lineLayer) lineLayer.clearLayers();
+  }
+  function addGuessMarker(lat, lon, nickname) {
+    if (!ensureLayers()) return;
+    L.marker([lat, lon], { title: `Gissning${nickname ? ' – ' + nickname : ''}` })
+      .addTo(guessLayer)
+      .bindPopup(`Gissning${nickname ? ' – ' + nickname : ''}`);
+  }
+  function showSolutionMarker(lat, lon) {
+    if (!ensureLayers()) return;
+    L.marker([lat, lon], { title: 'Facit' })
+      .addTo(solutionLayer)
+      .bindPopup('Facit')
+      .openPopup();
+  }
+  function drawLineGuessToSolution(guess, solution) {
+    if (!ensureLayers() || !guess || !solution) return;
+    L.polyline([guess, solution], { weight: 3, opacity: 0.85 }).addTo(lineLayer);
+    try {
+      const bounds = L.latLngBounds([guess, solution]);
+      window.map.fitBounds(bounds.pad(0.2));
+    } catch {}
   }
 
-  navUtmana?.addEventListener('click', (e) => {
-    e.preventDefault();
-    showUtmana();
-  });
-
-  // --- API helpers ---
+  // ======= API helper =======
   async function api(path, opts = {}) {
     const res = await fetch(path, {
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       ...opts
     });
     if (!res.ok) {
-      const msg = await res.text();
+      let msg = '';
+      try { msg = await res.text(); } catch {}
       throw new Error(msg || res.statusText);
     }
     return res.json();
   }
 
-  // --- Lobby refresh ---
+  // ======= Lobby =======
   async function refreshLobby() {
     if (!S.code) return;
     try {
@@ -98,11 +144,9 @@ const navUtmana = view('tabUtmana');
         lbPlayers.appendChild(li);
       });
 
-      // visa Start endast för host i lobby
       btnStart.style.display = (S.isHost && data.status === 'lobby') ? 'inline-block' : 'none';
 
       if (data.status === 'active') {
-        // spelet har startat – gå till runda 1
         clearInterval(S.lobbyTimer);
         S.roundNo = 1;
         enterRound();
@@ -111,10 +155,8 @@ const navUtmana = view('tabUtmana');
       console.warn('lobby error', e);
     }
   }
-
-  // --- Enter Lobby ---
   function enterLobby() {
-    view('mp-auth').style.display = 'none';
+    vAuth.style.display = 'none';
     vLobby.style.display = 'block';
     vGame.style.display = 'none';
     vFinal.style.display = 'none';
@@ -123,26 +165,31 @@ const navUtmana = view('tabUtmana');
     S.lobbyTimer = setInterval(refreshLobby, 2000);
   }
 
-  // --- Enter Round ---
+  // ======= Runda =======
   async function enterRound() {
     vLobby.style.display = 'none';
     vGame.style.display = 'block';
     vFinal.style.display = 'none';
+
+    // Reset UI + markörer
     roundResult.innerHTML = '';
     btnNextRound.style.display = 'none';
     btnFinal.style.display = 'none';
+    clearRoundLayers();
 
     gRoundNo.textContent = S.roundNo;
-    // hämta runda (lat/lon behövs för din karta)
-    const r = await api(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
-    // Om du vill centrera karta, använd r.round.lat/lon här.
 
-    // nolla ev. inputfält
+    // Hämta runda och centrera Leaflet
+    const r = await api(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
+    if (window.map && r && r.round) {
+      window.map.setView([r.round.lat, r.round.lon], 13);
+    }
+
     guessLat.value = '';
     guessLon.value = '';
   }
 
-  // --- Skapa spel ---
+  // ======= Skapa spel =======
   formCreate?.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -163,7 +210,7 @@ const navUtmana = view('tabUtmana');
     }
   });
 
-  // --- Anslut ---
+  // ======= Anslut =======
   formJoin?.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -171,7 +218,7 @@ const navUtmana = view('tabUtmana');
         code: joinCode.value.trim(),
         nickname: joinNick.value.trim()
       };
-      const data = await api('/api/match/join', { method: 'POST', body: JSON.stringify(body) });
+      await api('/api/match/join', { method: 'POST', body: JSON.stringify(body) });
       S.code = body.code;
       S.nickname = body.nickname;
       S.isHost = false;
@@ -181,40 +228,45 @@ const navUtmana = view('tabUtmana');
     }
   });
 
-  // --- Starta (host) ---
+  // ======= Starta (host) =======
   btnStart?.addEventListener('click', async () => {
     try {
       await api(`/api/match/start?code=${encodeURIComponent(S.code)}`, { method: 'POST' });
-      // nästa lobby-refresh triggar active -> enterRound()
+      // lobby-poll växlar till enterRound() när status blir active
     } catch (e) {
       alert('Kunde inte starta spelet: ' + e.message);
     }
   });
 
-  // --- Skicka gissning ---
+  // ======= Skicka gissning =======
   async function sendGuess(lat, lon) {
     try {
-      const payload = {
-        code: S.code,
-        nickname: S.nickname,
-        lat: Number(lat),
-        lon: Number(lon)
-      };
+      const payload = { code: S.code, nickname: S.nickname, lat: Number(lat), lon: Number(lon) };
       await api(`/api/match/guess?round_no=${S.roundNo}`, {
         method: 'POST',
         body: JSON.stringify(payload)
       });
 
-      // hämta rundresultat (leaderboard per runda)
+      // Hämta rundresultat
       const res = await api(`/api/match/round_result?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
-      const list = (res.leaderboard || []).map((r, i) =>
-        `<li>${i + 1}. ${r.nickname} – ${r.distance_m} m</li>`).join('');
+
+      // Visa facit + linje (om vi har en egen gissning sparad)
+      if (res && res.solution) {
+        showSolutionMarker(res.solution.lat, res.solution.lon);
+        if (myLastGuess) {
+          drawLineGuessToSolution(myLastGuess, [res.solution.lat, res.solution.lon]);
+        }
+      }
+
+      // Lista i UI
+      const list = (res.leaderboard || [])
+        .map((r, i) => `<li>${i + 1}. ${r.nickname} – ${r.distance_m} m</li>`).join('');
       roundResult.innerHTML =
         `<p>Facit: lat ${res.solution.lat.toFixed(5)}, lon ${res.solution.lon.toFixed(5)}</p>
          <h4>Runda ${res.round_no} – leaderboard</h4>
          <ol>${list}</ol>`;
 
-      // visa vidare-knappar
+      // Vidare-knappar
       if (S.roundNo < S.rounds) {
         btnNextRound.style.display = 'inline-block';
       } else {
@@ -232,6 +284,8 @@ const navUtmana = view('tabUtmana');
       alert('Fyll i lat och lon');
       return;
     }
+    addGuessMarker(lat, lon, S.nickname);
+    myLastGuess = [lat, lon];
     sendGuess(lat, lon);
   });
 
@@ -252,16 +306,43 @@ const navUtmana = view('tabUtmana');
     }
   });
 
-  // --- Karthook ---
-  // Anropa window.onMapClick(lat, lon) från din befintliga kartkod när användaren klickar.
+  // ======= Leaflet-karthook =======
+  // I din kartinit (annan fil): 
+  //   window.map = map;
+  //   map.on('click', e => window.onMapClick(e.latlng.lat, e.latlng.lng));
   window.onMapClick = function (lat, lon) {
     guessLat.value = lat.toFixed(6);
     guessLon.value = lon.toFixed(6);
-    // Skicka direkt (eller låt användaren trycka på knappen)
+    addGuessMarker(lat, lon, S.nickname);
+    myLastGuess = [lat, lon];
+    // Vill du auto-skicka direkt vid klick? Avkommentera:
     // sendGuess(lat, lon);
   };
 
-  // Auto: om sidan laddas och hash = #utmana, öppna direkt
-  if (location.hash === '#utmana') showUtmana();
+  // ======= Startläge: flik + vy =======
+  if (location.hash === '#utmana') {
+    setActive(navUtmana);
+    showOnly('view-utmana');
+  } else {
+    setActive(tabPlay);
+    showOnly('view-play');
+  }
+
+// === Leaflet-init ===
+const map = L.map('map').setView([62.0, 15.0], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19
+}).addTo(map);
+
+// Gör kartan global så resten av multiplayer.js kan använda den
+window.map = map;
+
+// Koppla klick till multiplayer-hook
+map.on('click', (e) => {
+  if (window.onMapClick) {
+    window.onMapClick(e.latlng.lat, e.latlng.lng);
+  }
+});
+
 
 })();
