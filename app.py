@@ -3,70 +3,102 @@ from __future__ import annotations
 import csv, os, random, datetime, sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+# ==== REN FASTAPI-DEL (ersätter all Flask-användning) ====
+from __future__ import annotations
+import os, sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-# =========================================================
-# DB settings (Render: Postgres via DATABASE_URL, annars SQLite)
-# =========================================================
-DB_URL = os.getenv("DATABASE_URL", "").strip()
-USE_PG = DB_URL != ""  # True = Postgres, False = SQLite
+app = FastAPI(title="Geoguessr - The Nabo Way (API)")
 
-# Paths
+# --- DB setup (återanvänder dina variabler om de redan finns) ---
 APP_DIR = Path(__file__).parent.resolve()
-STATIC_DIR = APP_DIR / "static"
-IMG_DIR = APP_DIR / "img"
-TEMPLATES_DIR = APP_DIR / "templates"
 SQLITE_PATH = APP_DIR / "app.db"
 
-import os
-from flask import Flask, request, jsonify
+DB_URL = os.getenv("DATABASE_URL", "").strip()
+USE_PG = bool(DB_URL)
 
-# Skapa Flask-app innan du använder den
-app = Flask(__name__)
+# psycopg (v3) är frivilligt för SQLite-läge
+if USE_PG:
+    import psycopg
+
+def _connect():
+    if USE_PG:
+        # Render Postgres, ssl krävs inte när du använder Internal URL
+        return psycopg.connect(DB_URL, autocommit=True)
+    else:
+        conn = sqlite3.connect(str(SQLITE_PATH))
+        conn.row_factory = sqlite3.Row
+        return conn
+
+@contextmanager
+def _db():
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        yield cur
+        if not USE_PG:
+            conn.commit()
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+        conn.close()
+
+# --- Hjälpare för att kolla om tabell finns ---
+def _table_exists(cur, table_name: str) -> bool:
+    if USE_PG:
+        cur.execute("""
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema='public' AND table_name=%s
+            LIMIT 1
+        """, (table_name,))
+        return cur.fetchone() is not None
+    else:
+        cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1;", (table_name,))
+        return cur.fetchone() is not None
+
+# --- Ping: enkel hälsokoll ---
+@app.get("/ping")
+def ping():
+    has_db_url = bool(DB_URL)
+    return {"ok": True, "msg": "pong", "use_pg": USE_PG, "has_db_url": has_db_url}
 
 # --- INIT DB (tillfällig admin-endpoint) ---
-def _table_exists(cur, table_name: str) -> bool:
-    cur.execute("""
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = %s
-        LIMIT 1
-    """, (table_name,))
-    return cur.fetchone() is not None
-
 @app.post("/__admin/init_db_once")
-def init_db_once():
-    # Enkel säkerhet med token i env
-    token_env = os.environ.get("INIT_TOKEN")
-    token_req = request.headers.get("X-Init-Token") or request.args.get("token")
+async def init_db_once(request: Request):
+    # enkel “auth”: token i env + header ?token= eller X-Init-Token
+    token_env = os.environ.get("INIT_TOKEN", "")
+    token_req = request.headers.get("X-Init-Token") or request.query_params.get("token")
     if not token_env or token_req != token_env:
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
 
-    # Kör inte om den redan finns
+    # kör inte om tabellerna redan finns
     with _db() as cur:
         if _table_exists(cur, "games"):
-            return jsonify({"ok": True, "message": "Tabeller verkar redan finnas."})
+            return {"ok": True, "message": "Tabeller verkar redan finnas."}
 
-    # Läs SQL från filen
-    sql_path = os.path.join(os.path.dirname(__file__), "db", "create_multiplayer.sql")
-    try:
-        with open(sql_path, "r", encoding="utf-8") as f:
-            sql = f.read()
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"Kunde inte läsa SQL-filen: {e}"}), 500
+    # läs in SQL-filen
+    sql_path = APP_DIR / "db" / "create_multiplayer.sql"
+    if not sql_path.exists():
+        return JSONResponse({"ok": False, "error": f"Saknar {sql_path}"}, status_code=500)
 
-    # Kör SQL i ett svep
+    sql = sql_path.read_text(encoding="utf-8")
+
+    # kör i ett svep (psycopg/sqlite accepterar flera statements)
     try:
         with _db() as cur:
             cur.execute(sql)
     except Exception as e:
-        return jsonify({"ok": False, "error": f"SQL-exec fel: {e}"}), 500
+        return JSONResponse({"ok": False, "error": f"SQL-exec fel: {e}"}, status_code=500)
 
-    return jsonify({"ok": True, "message": "Multiplayer-tabeller skapade."})
+    return {"ok": True, "message": "Multiplayer-tabeller skapade."}
+# ====== SLUT PÅ REN MALL ======
+
 
 
 
