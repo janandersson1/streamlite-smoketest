@@ -103,9 +103,11 @@ async function enterRound(){
   mpYou.textContent    = 'Klicka på kartan för att gissa.';
   if($('#info')) $('#info').textContent = 'Klicka på kartan för att gissa.';
 
-  // hämta/aktivera rundan (backend väljer plats men visar ej facit)
-  await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
+// hämta rundan (backend returnerar place.display_name som vi visar som ledtråd)
+const r = await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
 
+const clueEl = document.getElementById('clue');
+if (clueEl) clueEl.textContent = `Ledtråd: ${(r?.place?.display_name || '').trim()}`;
   renderRoundBoard([]);
 
   // starta polling av round_result
