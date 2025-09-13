@@ -22,10 +22,13 @@ IMG_DIR = APP_DIR / "img"
 TEMPLATES_DIR = APP_DIR / "templates"
 SQLITE_PATH = APP_DIR / "app.db"
 
-# --- INIT DB (tillfällig admin-endpoint) ---
 import os
-from flask import request, jsonify
+from flask import Flask, request, jsonify
 
+# Skapa Flask-app innan du använder den
+app = Flask(__name__)
+
+# --- INIT DB (tillfällig admin-endpoint) ---
 def _table_exists(cur, table_name: str) -> bool:
     cur.execute("""
         SELECT 1
@@ -64,6 +67,7 @@ def init_db_once():
         return jsonify({"ok": False, "error": f"SQL-exec fel: {e}"}), 500
 
     return jsonify({"ok": True, "message": "Multiplayer-tabeller skapade."})
+
 
 
 
