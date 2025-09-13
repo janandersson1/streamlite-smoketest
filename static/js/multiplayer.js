@@ -14,7 +14,7 @@ async function fetchJson(url, opt){
   const headers = {'Content-Type':'application/json', ...(o.headers||{})};
   const body = o.body ? JSON.stringify(o.body) : undefined;
   const res = await fetch(url, {...o, headers, body});
-  if(!res.ok){ throw new Error(await res.text()||res.statusText); }
+  if(!res.ok){ throw new Error((await res.text())||res.statusText); }
   return res.json();
 }
 function haversineKm(lat1,lon1,lat2,lon2){
@@ -73,23 +73,43 @@ window.onMapClick = async (lat, lon) => {
   }
 };
 
-// ===== Lobby =====
+// ===== Lobby (visa & polla tills spelet startar) =====
 async function enterLobby(){
   clearInterval(S.pollTimer);
   clearInterval(S.countdownTimer);
+
   vLobby.style.display='block';
   vGame.style.display='none';
   vFinal.style.display='none';
+
+  // Läs initial info (spelare mm)
   try{
     const r = await fetchJson(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
     if(r?.players) S.players = r.players;
+    if(r?.status === 'active'){
+      // Värden hann redan starta – hoppa direkt in
+      return await enterRound();
+    }
   }catch{}
+
+  // Polla lobbyn – när status==active -> in i runda
+  S.pollTimer = setInterval(async ()=>{
+    try{
+      const r = await fetchJson(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
+      if(r?.players) S.players = r.players;
+      if(r?.status === 'active'){
+        clearInterval(S.pollTimer);
+        await enterRound();
+      }
+    }catch{}
+  }, 2000);
 }
 
 // ===== Starta en runda =====
 async function enterRound(){
   clearInterval(S.pollTimer);
   clearInterval(S.countdownTimer);
+
   S.hasGuessed = false;
   S.myGuess = null;
   setMapLocked(false);
@@ -100,14 +120,22 @@ async function enterRound(){
 
   gRoundNo.textContent = S.roundNo;
   gCode.textContent    = S.code;
-  mpYou.textContent    = 'Klicka på kartan för att gissa.';
+
+  // Hämta/aktivera rundan (backend väljer plats men visar ej facit)
+  // ⬇️ NYTT: vi läser svaret och sätter ledtrådstexten
+  let roundData = null;
+  try{
+    roundData = await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
+  }catch(e){
+    // även om detta faller, låt spelet gå vidare (men utan ledtråd)
+  }
+
+  const clueTxt = (roundData?.place?.display_name || roundData?.place?.clue || '').trim();
+  if($('#clue')) $('#clue').textContent = `Ledtråd: ${clueTxt || '—'}`;
+
+  mpYou.textContent = 'Klicka på kartan för att gissa.';
   if($('#info')) $('#info').textContent = 'Klicka på kartan för att gissa.';
 
-// hämta rundan (backend returnerar place.display_name som vi visar som ledtråd)
-const r = await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
-
-const clueEl = document.getElementById('clue');
-if (clueEl) clueEl.textContent = `Ledtråd: ${(r?.place?.display_name || '').trim()}`;
   renderRoundBoard([]);
 
   // starta polling av round_result
@@ -182,7 +210,7 @@ async function sendGuess(lat, lon){
 
 // ===== Live-board för rundan =====
 async function refreshRoundBoard(){
-  // uppdatera spelare (ifall någon droppat/joinat innan start)
+  // uppdatera spelare (ifall någon droppat/joinat)
   try{
     const lob = await fetchJson(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
     if(lob?.players) S.players = lob.players;
@@ -258,11 +286,11 @@ btnFinal?.addEventListener('click', async ()=>{
   }catch(e){ alert('Kunde inte hämta slutresultat: '+e.message); }
 });
 
-// ===== Publika hjälpare som din index.html redan använder =====
+// ===== Publika hjälpare som index.html använder =====
 window.Utmana = {
-  // Kallas efter create/join
   setSession({code, city, rounds, nickname}){
     S.code = code; S.city = city; S.rounds = rounds; S.nickname = nickname;
   },
-  enterLobby, enterRound,
+  enterLobby,
+  enterRound,
 };
