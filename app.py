@@ -1,17 +1,21 @@
-# === Standard imports ===
 import os, csv, random, datetime, sqlite3
 from pathlib import Path
 from contextlib import contextmanager
 
-# === FastAPI ===
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 app = FastAPI(title="Geoguessr - The Nabo Way (API)")
 
-# === DB setup ===
+# Paths
 APP_DIR = Path(__file__).parent.resolve()
 SQLITE_PATH = APP_DIR / "app.db"
+
+STATIC_DIR = APP_DIR / "static"
+IMG_DIR = APP_DIR / "img"
+TEMPLATES_DIR = APP_DIR / "templates"
 
 DB_URL = os.getenv("DATABASE_URL", "").strip()
 USE_PG = bool(DB_URL)
