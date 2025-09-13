@@ -22,6 +22,50 @@ IMG_DIR = APP_DIR / "img"
 TEMPLATES_DIR = APP_DIR / "templates"
 SQLITE_PATH = APP_DIR / "app.db"
 
+# --- INIT DB (tillfällig admin-endpoint) ---
+import os
+from flask import request, jsonify
+
+def _table_exists(cur, table_name: str) -> bool:
+    cur.execute("""
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = %s
+        LIMIT 1
+    """, (table_name,))
+    return cur.fetchone() is not None
+
+@app.post("/__admin/init_db_once")
+def init_db_once():
+    # Enkel säkerhet med token i env
+    token_env = os.environ.get("INIT_TOKEN")
+    token_req = request.headers.get("X-Init-Token") or request.args.get("token")
+    if not token_env or token_req != token_env:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    # Kör inte om den redan finns
+    with _db() as cur:
+        if _table_exists(cur, "games"):
+            return jsonify({"ok": True, "message": "Tabeller verkar redan finnas."})
+
+    # Läs SQL från filen
+    sql_path = os.path.join(os.path.dirname(__file__), "db", "create_multiplayer.sql")
+    try:
+        with open(sql_path, "r", encoding="utf-8") as f:
+            sql = f.read()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Kunde inte läsa SQL-filen: {e}"}), 500
+
+    # Kör SQL i ett svep
+    try:
+        with _db() as cur:
+            cur.execute(sql)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"SQL-exec fel: {e}"}), 500
+
+    return jsonify({"ok": True, "message": "Multiplayer-tabeller skapade."})
+
+
 
 # ===== Platser från CSV (riktiga speldata) =====
 # ===== Platser från CSV (riktiga speldata) =====
