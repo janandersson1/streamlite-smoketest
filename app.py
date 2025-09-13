@@ -116,6 +116,15 @@ def _ensure_multiplayer_tables():
         raise RuntimeError(f"Saknar SQL-filen: {sql_path}")
     _run_sql_script(sql_path.read_text(encoding="utf-8"))
 
+def _find_row_by_id(city: str, place_id: str) -> dict | None:
+    key = (city or "").lower().strip()
+    pid = (place_id or "").strip()
+    for r in CITY_PLACES.get(key, []):
+        if (r.get("id") or "").strip() == pid:
+            return r
+    return None
+
+
 # --- Ping ---
 @app.get("/ping")
 def ping():
@@ -572,15 +581,17 @@ def api_match_start(code: str):
 def api_match_round(code: str, round_no: int):
     code = (code or "").strip()
     with _db() as cur:
+        # hämta game + status + city
         if USE_PG:
-            cur.execute("SELECT id, status FROM games WHERE code=%s", (code,))
+            cur.execute("SELECT id, status, city FROM games WHERE code=%s", (code,))
         else:
-            cur.execute("SELECT id, status FROM games WHERE code=?", (code,))
+            cur.execute("SELECT id, status, city FROM games WHERE code=?", (code,))
         g = cur.fetchone()
         if not g:
             raise HTTPException(status_code=404, detail="Spel hittas inte")
-        game_id, status = g[0], g[1]
+        game_id, status, city = (g[0], g[1], g[2])
 
+        # hämta vald runda
         if USE_PG:
             cur.execute("SELECT id, place_id, lat, lon FROM game_rounds WHERE game_id=%s AND round_no=%s",
                         (game_id, int(round_no)))
@@ -592,7 +603,28 @@ def api_match_round(code: str, round_no: int):
             raise HTTPException(status_code=404, detail="Rundan finns inte")
         round_id, place_id, lat, lon = r
 
-    return {"round": {"round_no": int(round_no), "place_id": place_id, "lat": float(lat), "lon": float(lon)}, "status": status}
+    # bygg ledtråd + address från CSV
+    row = _find_row_by_id(city, str(place_id)) or {}
+    display_name = (row.get("display_name") or "").strip()
+    street       = (row.get("street") or "").strip()
+    postnr       = (row.get("postnummer") or "").strip()
+    ort          = (row.get("ort") or "").strip()
+    address_full = row.get("address_full") or ", ".join(p for p in [street, postnr, ort] if p)
+    clue         = display_name  # <-- krav: display_name är ledtråd
+    address      = street or address_full or display_name
+
+    return {
+        "status": status,
+        "round": {
+            "round_no": int(round_no),
+            "place_id": place_id,
+            "lat": float(lat),
+            "lon": float(lon),
+            "clue": clue,
+            "address": address
+        }
+    }
+
 
 @app.post("/api/match/guess")
 def api_match_guess(payload: GuessIn, round_no: int):
@@ -657,25 +689,26 @@ def api_match_round_result(code: str, round_no: int):
     code = (code or "").strip()
     with _db() as cur:
         if USE_PG:
-            cur.execute("SELECT id FROM games WHERE code=%s", (code,))
+            cur.execute("SELECT id, city FROM games WHERE code=%s", (code,))
         else:
-            cur.execute("SELECT id FROM games WHERE code=?", (code,))
+            cur.execute("SELECT id, city FROM games WHERE code=?", (code,))
         g = cur.fetchone()
         if not g:
             raise HTTPException(status_code=404, detail="Spel hittas inte")
-        game_id = g[0]
+        game_id, city = g[0], g[1]
 
         if USE_PG:
-            cur.execute("SELECT id, lat, lon FROM game_rounds WHERE game_id=%s AND round_no=%s",
+            cur.execute("SELECT id, place_id, lat, lon FROM game_rounds WHERE game_id=%s AND round_no=%s",
                         (game_id, int(round_no)))
         else:
-            cur.execute("SELECT id, lat, lon FROM game_rounds WHERE game_id=? AND round_no=?",
+            cur.execute("SELECT id, place_id, lat, lon FROM game_rounds WHERE game_id=? AND round_no=?",
                         (game_id, int(round_no)))
         r = cur.fetchone()
         if not r:
             raise HTTPException(status_code=404, detail="Rundan finns inte")
-        round_id, lat, lon = r
+        round_id, place_id, lat, lon = r
 
+        # leaderboard för rundan
         if USE_PG:
             cur.execute("""
                 SELECT gp.nickname, gu.distance_m
@@ -694,7 +727,21 @@ def api_match_round_result(code: str, round_no: int):
             """, (round_id,))
         board = [{"nickname": row[0], "distance_m": row[1]} for row in cur.fetchall()]
 
-    return {"round_no": int(round_no), "solution": {"lat": float(lat), "lon": float(lon)}, "leaderboard": board}
+    # address från CSV för “rätt svar”
+    row = _find_row_by_id(city, str(place_id)) or {}
+    display_name = (row.get("display_name") or "").strip()
+    street       = (row.get("street") or "").strip()
+    postnr       = (row.get("postnummer") or "").strip()
+    ort          = (row.get("ort") or "").strip()
+    address_full = row.get("address_full") or ", ".join(p for p in [street, postnr, ort] if p)
+    address      = street or address_full or display_name
+
+    return {
+        "round_no": int(round_no),
+        "solution": {"lat": float(lat), "lon": float(lon), "address": address},
+        "leaderboard": board
+    }
+
 
 @app.get("/api/match/final")
 def api_match_final(code: str):
