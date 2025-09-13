@@ -189,6 +189,16 @@
     guessLon.value = '';
   }
 
+function showUtmana() {
+  // ... som du redan har ...
+  window.__MP_ACTIVE__ = true;   // <— LÄGG TILL
+}
+
+function showUtmanaOff() {
+  window.__MP_ACTIVE__ = false;  // <— LÄGG TILL OM DU HAR EN “stäng”/växla-funktion
+}
+
+
   // ======= Skapa spel =======
   formCreate?.addEventListener('submit', async (e) => {
     e.preventDefault();
