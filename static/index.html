@@ -876,8 +876,6 @@
 
 <!-- Multiplayer (ny fil med låsning & timer) -->
 <script src="/static/js/multiplayer.js"></script>
-
-<!-- Koppling: create/join/start ↔ API ↔ Utmana -->
 <script>
 (function(){
   const authBox   = document.getElementById('mp-auth');
@@ -889,6 +887,17 @@
   const playersUl = document.getElementById('lbPlayers');
   const btnStart  = document.getElementById('btnStart');
 
+  // ==== Lobby-pollning (NYTT) ====
+  let lobbyTimer = null;
+  function startLobbyPolling(code){
+    stopLobbyPolling();
+    lobbyTimer = setInterval(() => refreshLobbyUI(code), 2000);
+  }
+  function stopLobbyPolling(){
+    if (lobbyTimer){ clearInterval(lobbyTimer); lobbyTimer = null; }
+  }
+
+  // ==== Läs in lobby + auto-hoppa till runda när värd startar (NYTT) ====
   async function refreshLobbyUI(code){
     try{
       const j = await fetch(`/api/match/lobby?code=${encodeURIComponent(code)}`).then(r=>r.json());
@@ -898,10 +907,17 @@
       roundsEl.textContent = j.rounds ?? '';
       statusEl.textContent = j.status ?? '';
       playersUl.innerHTML  = (j.players||[]).map(n=>`<li>${n}</li>`).join('');
+
+      // Auto in i spelet för alla när värden har startat
+      if (j.status === 'active' && lobbyBox.style.display !== 'none') {
+        lobbyBox.style.display = 'none';
+        stopLobbyPolling();
+        await window.Utmana.enterRound();
+      }
     }catch{}
   }
 
-  // CREATE (värd)
+  // ==== CREATE (värd) – städad & med pollning ====
   document.getElementById('formCreate')?.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const host   = document.getElementById('hostName').value.trim();
@@ -909,7 +925,8 @@
     const rounds = parseInt(document.getElementById('hostRounds').value,10) || 5;
 
     const res = await fetch('/api/match/create',{
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
       body: JSON.stringify({host_name:host, city, rounds})
     });
     if(!res.ok){ alert(await res.text()); return; }
@@ -922,45 +939,20 @@
     lobbyBox.style.display='block';
     btnStart.style.display='inline-block';
     showTab('utmana');
+
     await refreshLobbyUI(j.code);
-
-// CREATE (värd)
-document.getElementById('formCreate')?.addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  const host   = document.getElementById('hostName').value.trim();
-  const city   = document.getElementById('hostCity').value;
-  const rounds = parseInt(document.getElementById('hostRounds').value,10) || 5;
-
-  const res = await fetch('/api/match/create',{
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({host_name:host, city, rounds})
-  });
-  if(!res.ok){ alert(await res.text()); return; }
-  const j = await res.json();
-
-  window.Utmana.setSession({code:j.code, city:j.city, rounds:j.rounds, nickname:host});
-  window.__mp_code = j.code;
-
-  authBox.style.display='none';
-  lobbyBox.style.display='block';
-  btnStart.style.display='inline-block';
-  showTab('utmana');
-  await refreshLobbyUI(j.code);
-
-  // ⬇️ NYTT: börja polla lobbyn
-  window.Utmana.enterLobby();
-});
-
+    startLobbyPolling(j.code);             // <— börja polla lobbyn
   });
 
-  // JOIN (spelare)
+  // ==== JOIN (spelare) – städad & med pollning ====
   document.getElementById('formJoin')?.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const code = document.getElementById('joinCode').value.trim();
     const nick = document.getElementById('joinNick').value.trim() || 'Guest';
 
-    const res = await fetch('/api/match/join',{
-      method:'POST', headers:{'Content-Type':'application/json'},
+    const res = await fetch('/api/match/join', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
       body: JSON.stringify({code, nickname:nick})
     });
     if(!res.ok){ alert(await res.text()); return; }
@@ -971,27 +963,33 @@ document.getElementById('formCreate')?.addEventListener('submit', async (e)=>{
 
     authBox.style.display='none';
     lobbyBox.style.display='block';
-    btnStart.style.display='none'; // endast värd
+    btnStart.style.display='none'; // endast värd ser Start
     showTab('utmana');
-    await refreshLobbyUI(code);
 
-  window.Utmana.enterLobby();
+    await refreshLobbyUI(code);
+    startLobbyPolling(code);               // <— börja polla lobbyn
   });
 
-  // START (värden trycker)
+  // ==== START (värden) – stoppa pollning och in i rundan ====
   btnStart?.addEventListener('click', async ()=>{
     if(!window.__mp_code) return;
     const r = await fetch(`/api/match/start?code=${encodeURIComponent(window.__mp_code)}`, {method:'POST'});
     if(!r.ok){ alert(await r.text()); return; }
     statusEl.textContent = 'active';
     lobbyBox.style.display='none';
-    await window.Utmana.enterRound();
+    stopLobbyPolling();                    // <— stoppa lobby-poll
+    await window.Utmana.enterRound();      // <— in i spelet
   });
 
+  // ==== Om man klickar på “Utmana” i menyn – uppdatera och (om kod finns) fortsätt polla ====
   document.getElementById('navUtmana')?.addEventListener('click', ()=>{
-    if(window.__mp_code) refreshLobbyUI(window.__mp_code);
+    if(window.__mp_code){
+      refreshLobbyUI(window.__mp_code);
+      startLobbyPolling(window.__mp_code);
+    }
   });
 })();
 </script>
+
 </body>
 </html>
