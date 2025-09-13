@@ -1,358 +1,266 @@
-// static/js/multiplayer.js
-(function () {
-  const view = id => document.getElementById(id);
-  const $ = sel => document.querySelector(sel);
+// ===== Multiplayer – konfig =====
+const ROUND_TIME_SEC = 60; // ändra om du vill
+const CITY_CENTERS = {
+  stockholm: {lat:59.334, lon:18.063},
+  goteborg:  {lat:57.707, lon:11.967},
+  malmo:     {lat:55.605, lon:13.003},
+};
 
-  // ======= Meny & vyer =======
-  const tabPlay    = view('tabPlay');        // Spela-knappen
-  const navUtmana  = view('navUtmana');      // Utmana-knappen
-  const vPlay      = view('view-play');      // Singleplayer-vy (måste finnas i HTML)
-  const vUtmana    = view('view-utmana');    // Multiplayer-vy (måste finnas i HTML)
+// ===== Hjälp =====
+const $ = (s)=>document.querySelector(s);
+const esc = (s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function fetchJson(url, opt){
+  const o = opt||{};
+  const headers = {'Content-Type':'application/json', ...(o.headers||{})};
+  const body = o.body ? JSON.stringify(o.body) : undefined;
+  const res = await fetch(url, {...o, headers, body});
+  if(!res.ok){ throw new Error(await res.text()||res.statusText); }
+  return res.json();
+}
+function haversineKm(lat1,lon1,lat2,lon2){
+  const R=6371,toRad=x=>x*Math.PI/180;
+  const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
 
-  // Multiplayer-vyns element
-  const vAuth      = view('mp-auth');
-  const formCreate = view('formCreate');
-  const hostName   = view('hostName');
-  const hostCity   = view('hostCity');
-  const hostRounds = view('hostRounds');
+// ===== UI-element =====
+const vLobby = $('#mp-lobby');
+const vGame  = $('#mp-game');
+const vFinal = $('#mp-final');
+const gRoundNo = $('#gRoundNo');
+const gCode    = $('#gCode');
+const mpYou    = $('#mpYou');
+const tblBody  = $('#mpRoundTable tbody');
+const btnNextRound = $('#btnNextRound');
+const btnFinal     = $('#btnFinal');
+const mpTimerEl    = $('#mpTimer');
 
-  const formJoin   = view('formJoin');
-  const joinCode   = view('joinCode');
-  const joinNick   = view('joinNick');
+// ===== Global state =====
+const S = {
+  code: "", nickname: "", city: "", rounds: 5, roundNo: 1,
+  players: [], hasGuessed: false, myGuess: null,
+  pollTimer: null, countdownTimer: null, timeLeft: ROUND_TIME_SEC,
+  mapLocked: false,
+};
 
-  const vLobby     = view('mp-lobby');
-  const lbCode     = view('lbCode');
-  const lbCity     = view('lbCity');
-  const lbRounds   = view('lbRounds');
-  const lbStatus   = view('lbStatus');
-  const lbPlayers  = view('lbPlayers');
-  const btnStart   = view('btnStart');
-
-  const vGame      = view('mp-game');
-  const gRoundNo   = view('gRoundNo');
-  const guessLat   = view('guessLat');
-  const guessLon   = view('guessLon');
-  const btnSendGuess = view('btnSendGuess');
-  const roundResult  = view('roundResult');
-  const btnNextRound = view('btnNextRound');
-  const btnFinal     = view('btnFinal');
-
-  const vFinal     = view('mp-final');
-  const finalBoard = view('finalBoard');
-
-  // ======= Flik-toggling =======
-  function showOnly(sectionId) {
-    document.querySelectorAll('section[id^="view"]').forEach(el => (el.style.display = 'none'));
-    const v = document.getElementById(sectionId);
-    if (v) v.style.display = 'block';
+// ===== Karta: lås/öppna interaktion =====
+function setMapLocked(flag){
+  S.mapLocked = !!flag;
+  if(!window.map) return;
+  const m = window.map;
+  if(flag){
+    m.dragging.disable();
+    m.scrollWheelZoom.disable();
+    m.doubleClickZoom.disable();
+    m.boxZoom.disable();
+    m.keyboard.disable();
+    if(m.tap) m.tap.disable();
+  }else{
+    m.dragging.enable();
+    m.scrollWheelZoom.enable();
+    m.doubleClickZoom.enable();
+    m.boxZoom.enable();
+    m.keyboard.enable();
+    if(m.tap) m.tap.enable();
   }
-  function setActive(btn) {
-    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-  }
-  tabPlay?.addEventListener('click', () => {
-    setActive(tabPlay);
-    showOnly('view-play');
-  });
-  navUtmana?.addEventListener('click', (e) => {
-    e.preventDefault();
-    setActive(navUtmana);
-    showOnly('view-utmana');
-  });
+}
 
-  // ======= Globalt MP-state =======
-  const S = {
-    code: null,
-    nickname: null,
-    city: null,
-    rounds: 5,
-    roundNo: 1,
-    isHost: false,
-    lobbyTimer: null
-  };
-  window._mpState = S; // tillgängligt för andra script vid behov
+// ===== Kartklick => gissning =====
+window.onMapClick = async (lat, lon) => {
+  if(vGame?.style.display==='block' && !S.hasGuessed && !S.mapLocked){
+    await sendGuess(lat, lon);
+  }
+};
 
-  // ======= Leaflet-lager & helpers =======
-  let guessLayer = null;
-  let solutionLayer = null;
-  let lineLayer = null;
-  let myLastGuess = null; // [lat, lon]
+// ===== Lobby =====
+async function enterLobby(){
+  clearInterval(S.pollTimer);
+  clearInterval(S.countdownTimer);
+  vLobby.style.display='block';
+  vGame.style.display='none';
+  vFinal.style.display='none';
+  try{
+    const r = await fetchJson(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
+    if(r?.players) S.players = r.players;
+  }catch{}
+}
 
-  function ensureLayers() {
-    if (!window.L || !window.map) return false;
-    if (!guessLayer)    guessLayer    = L.layerGroup().addTo(window.map);
-    if (!solutionLayer) solutionLayer = L.layerGroup().addTo(window.map);
-    if (!lineLayer)     lineLayer     = L.layerGroup().addTo(window.map);
-    return true;
-  }
-  function clearRoundLayers() {
-    myLastGuess = null;
-    if (guessLayer) guessLayer.clearLayers();
-    if (solutionLayer) solutionLayer.clearLayers();
-    if (lineLayer) lineLayer.clearLayers();
-  }
-  function addGuessMarker(lat, lon, nickname) {
-    if (!ensureLayers()) return;
-    L.marker([lat, lon], { title: `Gissning${nickname ? ' – ' + nickname : ''}` })
-      .addTo(guessLayer)
-      .bindPopup(`Gissning${nickname ? ' – ' + nickname : ''}`);
-  }
-  function showSolutionMarker(lat, lon) {
-    if (!ensureLayers()) return;
-    L.marker([lat, lon], { title: 'Facit' })
-      .addTo(solutionLayer)
-      .bindPopup('Facit')
-      .openPopup();
-  }
-  function drawLineGuessToSolution(guess, solution) {
-    if (!ensureLayers() || !guess || !solution) return;
-    L.polyline([guess, solution], { weight: 3, opacity: 0.85 }).addTo(lineLayer);
-    try {
-      const bounds = L.latLngBounds([guess, solution]);
-      window.map.fitBounds(bounds.pad(0.2));
-    } catch {}
-  }
+// ===== Starta en runda =====
+async function enterRound(){
+  clearInterval(S.pollTimer);
+  clearInterval(S.countdownTimer);
+  S.hasGuessed = false;
+  S.myGuess = null;
+  setMapLocked(false);
 
-  // ======= API helper =======
-  async function api(path, opts = {}) {
-    const res = await fetch(path, {
-      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-      ...opts
+  vLobby.style.display='none';
+  vFinal.style.display='none';
+  vGame.style.display='block';
+
+  gRoundNo.textContent = S.roundNo;
+  gCode.textContent    = S.code;
+  mpYou.textContent    = 'Klicka på kartan för att gissa.';
+  if($('#info')) $('#info').textContent = 'Klicka på kartan för att gissa.';
+
+  // hämta/aktivera rundan (backend väljer plats men visar ej facit)
+  await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
+
+  renderRoundBoard([]);
+
+  // starta polling av round_result
+  S.pollTimer = setInterval(refreshRoundBoard, 2000);
+
+  // starta nedräkning
+  startCountdown();
+}
+
+// ===== Nedräkning/timeout =====
+function startCountdown(){
+  S.timeLeft = ROUND_TIME_SEC;
+  updateTimer();
+  S.countdownTimer = setInterval(()=>{
+    S.timeLeft -= 1;
+    updateTimer();
+    if(S.timeLeft<=0){
+      clearInterval(S.countdownTimer);
+      if(!S.hasGuessed){
+        autoGuessBecauseTimeout(); // skickar gissning
+      }
+    }
+  },1000);
+}
+function updateTimer(){
+  const t = Math.max(0, S.timeLeft);
+  const mm = String(Math.floor(t/60)).padStart(2,'0');
+  const ss = String(t%60).padStart(2,'0');
+  if(mpTimerEl) mpTimerEl.textContent = `${mm}:${ss}`;
+}
+async function autoGuessBecauseTimeout(){
+  // använd kartans center eller stadens center
+  let latlon = null;
+  if(window.map){
+    const c = window.map.getCenter();
+    latlon = {lat:c.lat, lon:c.lng};
+  }else if(CITY_CENTERS[S.city]){
+    latlon = CITY_CENTERS[S.city];
+  }else{
+    latlon = {lat:59.334, lon:18.063}; // fallback Sthlm
+  }
+  mpYou.innerHTML = `Tiden tog slut – automatiskt skickad gissning. Väntar på övriga ...`;
+  await sendGuess(latlon.lat, latlon.lon);
+}
+
+// ===== Skicka gissning =====
+async function sendGuess(lat, lon){
+  try{
+    const r = await fetchJson(`/api/match/guess?round_no=${S.roundNo}`, {
+      method:'POST',
+      body:{ code:S.code, nickname:S.nickname, lat, lon }
     });
-    if (!res.ok) {
-      let msg = '';
-      try { msg = await res.text(); } catch {}
-      throw new Error(msg || res.statusText);
+    S.hasGuessed = true;
+    S.myGuess = {lat, lon};
+    setMapLocked(true); // LÅS kartan efter gissning
+
+    const km = r?.distance_m!=null ? (r.distance_m/1000).toFixed(2) : null;
+    if($('#info')){
+      $('#info').innerHTML = km!=null
+        ? `<strong>Din gissning:</strong> ${km} km · väntar på övriga spelare ...`
+        : `Din gissning är mottagen – väntar på övriga spelare ...`;
     }
-    return res.json();
+    mpYou.innerHTML = km!=null
+      ? `Du har gissat: <strong>${r.distance_m} m</strong> – väntar på övriga spelare ...`
+      : `Gissning mottagen – väntar på övriga spelare ...`;
+
+    await refreshRoundBoard();
+  }catch(e){
+    alert('Kunde inte skicka gissning: ' + e.message);
   }
-
-  // ======= Lobby =======
-  async function refreshLobby() {
-    if (!S.code) return;
-    try {
-      const data = await api(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
-      lbCode.textContent = S.code;
-      lbCity.textContent = data.city || S.city || '';
-      lbRounds.textContent = data.rounds || S.rounds || '';
-      lbStatus.textContent = data.status;
-
-      lbPlayers.innerHTML = '';
-      (data.players || []).forEach(p => {
-        const li = document.createElement('li');
-        li.textContent = p;
-        lbPlayers.appendChild(li);
-      });
-
-      btnStart.style.display = (S.isHost && data.status === 'lobby') ? 'inline-block' : 'none';
-
-      if (data.status === 'active') {
-        clearInterval(S.lobbyTimer);
-        S.roundNo = 1;
-        enterRound();
-      }
-    } catch (e) {
-      console.warn('lobby error', e);
-    }
-  }
-  function enterLobby() {
-    vAuth.style.display = 'none';
-    vLobby.style.display = 'block';
-    vGame.style.display = 'none';
-    vFinal.style.display = 'none';
-    refreshLobby();
-    clearInterval(S.lobbyTimer);
-    S.lobbyTimer = setInterval(refreshLobby, 2000);
-  }
-
-  // ======= Runda =======
-  async function enterRound() {
-    vLobby.style.display = 'none';
-    vGame.style.display = 'block';
-    vFinal.style.display = 'none';
-
-    // Reset UI + markörer
-    roundResult.innerHTML = '';
-    btnNextRound.style.display = 'none';
-    btnFinal.style.display = 'none';
-    clearRoundLayers();
-
-    gRoundNo.textContent = S.roundNo;
-
-    // Hämta runda och centrera Leaflet
-    const r = await api(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
-    if (window.map && r && r.round) {
-      window.map.setView([r.round.lat, r.round.lon], 13);
-    }
-
-    guessLat.value = '';
-    guessLon.value = '';
-  }
-
-function showUtmana() {
-  // ... som du redan har ...
-  window.__MP_ACTIVE__ = true;   // <— LÄGG TILL
 }
 
-function showUtmanaOff() {
-  window.__MP_ACTIVE__ = false;  // <— LÄGG TILL OM DU HAR EN “stäng”/växla-funktion
+// ===== Live-board för rundan =====
+async function refreshRoundBoard(){
+  // uppdatera spelare (ifall någon droppat/joinat innan start)
+  try{
+    const lob = await fetchJson(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
+    if(lob?.players) S.players = lob.players;
+  }catch{}
+
+  let res;
+  try{
+    res = await fetchJson(`/api/match/round_result?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
+  }catch(e){ return; }
+
+  const board = Array.isArray(res?.leaderboard) ? res.leaderboard : [];
+  renderRoundBoard(board);
+
+  const doneCount = board.length;
+  const total = S.players.length;
+
+  if(doneCount>=total && total>0){
+    clearInterval(S.pollTimer);
+    clearInterval(S.countdownTimer);
+    await showSolutionAndButtons(res);
+  }else{
+    if($('#info')) $('#info').innerHTML = `Väntar på övriga: <strong>${doneCount}/${total}</strong> spelare klara.`;
+  }
+}
+function renderRoundBoard(board){
+  const doneBy = new Map(board.map(r=>[r.nickname, r.distance_m]));
+  const rows = S.players.map(p=>{
+    const dist = doneBy.get(p);
+    const status = dist!=null ? `<span class="badge badge-done">Klar</span>` : `<span class="badge badge-wait">Väntar ...</span>`;
+    const distTxt = dist!=null ? `${dist} m` : '–';
+    return `<tr><td>${esc(p)}</td><td>${status}</td><td>${distTxt}</td></tr>`;
+  });
+  tblBody.innerHTML = rows.join('');
 }
 
-
-  // ======= Skapa spel =======
-  formCreate?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      const body = {
-        host_name: hostName.value.trim() || 'Host',
-        city: hostCity.value,
-        rounds: Number(hostRounds.value || 5)
-      };
-      const data = await api('/api/match/create', { method: 'POST', body: JSON.stringify(body) });
-      S.code = data.code;
-      S.city = data.city;
-      S.rounds = data.rounds;
-      S.isHost = true;
-      S.nickname = body.host_name;
-      enterLobby();
-    } catch (err) {
-      alert('Kunde inte skapa spel: ' + err.message);
-    }
-  });
-
-  // ======= Anslut =======
-  formJoin?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      const body = {
-        code: joinCode.value.trim(),
-        nickname: joinNick.value.trim()
-      };
-      await api('/api/match/join', { method: 'POST', body: JSON.stringify(body) });
-      S.code = body.code;
-      S.nickname = body.nickname;
-      S.isHost = false;
-      enterLobby();
-    } catch (err) {
-      alert('Kunde inte ansluta: ' + err.message);
-    }
-  });
-
-  // ======= Starta (host) =======
-  btnStart?.addEventListener('click', async () => {
-    try {
-      await api(`/api/match/start?code=${encodeURIComponent(S.code)}`, { method: 'POST' });
-      // lobby-poll växlar till enterRound() när status blir active
-    } catch (e) {
-      alert('Kunde inte starta spelet: ' + e.message);
-    }
-  });
-
-  // ======= Skicka gissning =======
-  async function sendGuess(lat, lon) {
-    try {
-      const payload = { code: S.code, nickname: S.nickname, lat: Number(lat), lon: Number(lon) };
-      await api(`/api/match/guess?round_no=${S.roundNo}`, {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-
-      // Hämta rundresultat
-      const res = await api(`/api/match/round_result?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
-
-      // Visa facit + linje (om vi har en egen gissning sparad)
-      if (res && res.solution) {
-        showSolutionMarker(res.solution.lat, res.solution.lon);
-        if (myLastGuess) {
-          drawLineGuessToSolution(myLastGuess, [res.solution.lat, res.solution.lon]);
-        }
+// ===== Facit + knappar =====
+async function showSolutionAndButtons(res){
+  const sol = res?.solution;
+  if(sol?.lat!=null && sol?.lon!=null){
+    try{
+      if(typeof clearMapGraphics==='function') clearMapGraphics();
+      if(S.myGuess){
+        const bearing = typeof bearingDeg==='function'
+          ? bearingDeg(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon) : 0;
+        window.guessMarker = L.marker([S.myGuess.lat,S.myGuess.lon], {icon: makeArrowIcon(bearing)}).addTo(map);
       }
-
-      // Lista i UI
-      const list = (res.leaderboard || [])
-        .map((r, i) => `<li>${i + 1}. ${r.nickname} – ${r.distance_m} m</li>`).join('');
-      roundResult.innerHTML =
-        `<p>Facit: lat ${res.solution.lat.toFixed(5)}, lon ${res.solution.lon.toFixed(5)}</p>
-         <h4>Runda ${res.round_no} – leaderboard</h4>
-         <ol>${list}</ol>`;
-
-      // Vidare-knappar
-      if (S.roundNo < S.rounds) {
-        btnNextRound.style.display = 'inline-block';
-      } else {
-        btnFinal.style.display = 'inline-block';
+      window.trueMarker = L.marker([sol.lat,sol.lon], {icon: makeCheckIcon()}).addTo(map);
+      if(S.myGuess){
+        window.line = L.polyline([[S.myGuess.lat,S.myGuess.lon],[sol.lat,sol.lon]], {color:'#444', weight:2}).addTo(map);
+        map.fitBounds(window.line.getBounds(), {padding:[30,30]});
       }
-    } catch (e) {
-      alert('Kunde inte skicka gissning: ' + e.message);
+    }catch{}
+    if($('#info') && S.myGuess){
+      const dkm = haversineKm(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon);
+      $('#info').innerHTML = `<strong>Avstånd:</strong> ${dkm.toFixed(2)} km · <strong>Rätt plats</strong> markerad på kartan.`;
     }
   }
+  btnNextRound.style.display = (S.roundNo < S.rounds) ? 'inline-block' : 'none';
+  btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
+}
 
-  btnSendGuess?.addEventListener('click', () => {
-    const lat = parseFloat(guessLat.value);
-    const lon = parseFloat(guessLon.value);
-    if (isNaN(lat) || isNaN(lon)) {
-      alert('Fyll i lat och lon');
-      return;
-    }
-    addGuessMarker(lat, lon, S.nickname);
-    myLastGuess = [lat, lon];
-    sendGuess(lat, lon);
-  });
-
-  btnNextRound?.addEventListener('click', async () => {
-    S.roundNo += 1;
-    await enterRound();
-  });
-
-  btnFinal?.addEventListener('click', async () => {
-    try {
-      const res = await api(`/api/match/final?code=${encodeURIComponent(S.code)}`);
-      vGame.style.display = 'none';
-      vFinal.style.display = 'block';
-      finalBoard.innerHTML = (res.final || [])
-        .map((r, i) => `<li>${i + 1}. ${r.nickname} – ${r.total_m} m</li>`).join('');
-    } catch (e) {
-      alert('Kunde inte hämta slutresultat: ' + e.message);
-    }
-  });
-
-  // ======= Leaflet-karthook =======
-  // I din kartinit (annan fil): 
-  //   window.map = map;
-  //   map.on('click', e => window.onMapClick(e.latlng.lat, e.latlng.lng));
-  window.onMapClick = function (lat, lon) {
-    guessLat.value = lat.toFixed(6);
-    guessLon.value = lon.toFixed(6);
-    addGuessMarker(lat, lon, S.nickname);
-    myLastGuess = [lat, lon];
-    // Vill du auto-skicka direkt vid klick? Avkommentera:
-    // sendGuess(lat, lon);
-  };
-
-  // ======= Startläge: flik + vy =======
-  if (location.hash === '#utmana') {
-    setActive(navUtmana);
-    showOnly('view-utmana');
-  } else {
-    setActive(tabPlay);
-    showOnly('view-play');
-  }
-
-// === Leaflet-init ===
-const map = L.map('map').setView([62.0, 15.0], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19
-}).addTo(map);
-
-// Gör kartan global så resten av multiplayer.js kan använda den
-window.map = map;
-
-// Koppla klick till multiplayer-hook
-map.on('click', (e) => {
-  if (window.onMapClick) {
-    window.onMapClick(e.latlng.lat, e.latlng.lng);
-  }
+// ===== Knappar =====
+btnNextRound?.addEventListener('click', async ()=>{
+  S.roundNo += 1;
+  await enterRound();
+});
+btnFinal?.addEventListener('click', async ()=>{
+  try{
+    const res = await fetchJson(`/api/match/final?code=${encodeURIComponent(S.code)}`);
+    vGame.style.display='none';
+    vFinal.style.display='block';
+    $('#finalBoard').innerHTML = (res.final||[]).map((r,i)=>`<li>${i+1}. ${esc(r.nickname)} – ${r.total_m} m</li>`).join('');
+  }catch(e){ alert('Kunde inte hämta slutresultat: '+e.message); }
 });
 
-
-})();
+// ===== Publika hjälpare som din index.html redan använder =====
+window.Utmana = {
+  // Kallas efter create/join
+  setSession({code, city, rounds, nickname}){
+    S.code = code; S.city = city; S.rounds = rounds; S.nickname = nickname;
+  },
+  enterLobby, enterRound,
+};
