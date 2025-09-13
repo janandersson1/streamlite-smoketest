@@ -179,6 +179,37 @@
       border:1px solid rgba(255,255,255,.55); background: transparent; color: var(--beige);
       cursor:pointer; min-height:40px;
     }
+
+/* ===== Utmana – vänsterställt, smal status, inga vita ramar ===== */
+#view-utmana .card{
+  text-align: left;
+  background: transparent;     /* ta bort "kort"-bakgrund i Utmana */
+  border: 0 !important;        /* slå ut inline border:#ddd */
+  box-shadow: none;
+  padding: 0;                  /* valfritt: vill du behålla luft, ta bort denna rad */
+}
+
+#view-utmana h2,
+#view-utmana h3{
+  text-align: left;
+  margin: 0 0 10px;
+}
+
+#view-utmana .table-wrap{ margin-top: 8px; }
+
+/* Gör status smal och avstånd tydligt */
+#mpRoundTable{ table-layout: auto; }
+#mpRoundTable col.col-player   { width: auto; }
+#mpRoundTable col.col-status   { width: 90px; }       /* smal status */
+#mpRoundTable col.col-distance { width: 140px; }      /* gott om plats för avstånd */
+#mpRoundTable th, #mpRoundTable td{
+  white-space: nowrap;
+  text-align: left;
+}
+
+/* Mindre badges så kolumnen blir kompakt */
+.badge{ padding: 2px 8px; font-size: .8rem; }
+
   </style>
 </head>
 <body>
@@ -347,16 +378,22 @@
 
         <!-- Live-leaderboard för aktuell runda -->
         <div class="table-wrap">
-          <table id="mpRoundTable">
-            <thead>
-              <tr>
-                <th>Spelare</th>
-                <th>Status</th>
-                <th>Avstånd</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+<table id="mpRoundTable">
+  <colgroup>
+    <col class="col-player">
+    <col class="col-status">
+    <col class="col-distance">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Spelare</th>
+      <th>Status</th>
+      <th>Avstånd</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
         </div>
 
         <div style="margin-top:12px;">
@@ -849,6 +886,34 @@
     btnStart.style.display='inline-block';
     showTab('utmana');
     await refreshLobbyUI(j.code);
+
+// CREATE (värd)
+document.getElementById('formCreate')?.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const host   = document.getElementById('hostName').value.trim();
+  const city   = document.getElementById('hostCity').value;
+  const rounds = parseInt(document.getElementById('hostRounds').value,10) || 5;
+
+  const res = await fetch('/api/match/create',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({host_name:host, city, rounds})
+  });
+  if(!res.ok){ alert(await res.text()); return; }
+  const j = await res.json();
+
+  window.Utmana.setSession({code:j.code, city:j.city, rounds:j.rounds, nickname:host});
+  window.__mp_code = j.code;
+
+  authBox.style.display='none';
+  lobbyBox.style.display='block';
+  btnStart.style.display='inline-block';
+  showTab('utmana');
+  await refreshLobbyUI(j.code);
+
+  // ⬇️ NYTT: börja polla lobbyn
+  window.Utmana.enterLobby();
+});
+
   });
 
   // JOIN (spelare)
@@ -872,6 +937,8 @@
     btnStart.style.display='none'; // endast värd
     showTab('utmana');
     await refreshLobbyUI(code);
+
+  window.Utmana.enterLobby();
   });
 
   // START (värden trycker)
