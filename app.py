@@ -3,6 +3,7 @@ import os, csv, random, datetime, sqlite3, uuid
 from pathlib import Path
 from contextlib import contextmanager
 from math import radians, sin, cos, asin, sqrt
+from typing import Iterable, List, Tuple
 
 # === FastAPI / Pydantic ===
 from fastapi import FastAPI, Request, HTTPException
@@ -68,46 +69,87 @@ def _table_exists(cur, table_name: str) -> bool:
     cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1;", (table_name,))
     return cur.fetchone() is not None
 
+# ===== SQL-script helpers (kör flera statements för PG/SQLite) =====
+def _split_sql_statements(sql: str) -> Iterable[str]:
+    parts, buf = [], []
+    for line in sql.splitlines():
+        if line.strip().startswith("--"):
+            continue
+        buf.append(line)
+        if ";" in line:
+            chunk = "\n".join(buf).strip()
+            buf = []
+            if chunk:
+                parts.append(chunk.rstrip(";").strip())
+    tail = "\n".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return [p for p in parts if p]
+
+def _run_sql_script(sql: str):
+    if USE_PG:
+        with _connect() as conn:
+            cur = conn.cursor()
+            for stmt in _split_sql_statements(sql):
+                cur.execute(stmt)
+    else:
+        with _connect() as conn:
+            conn.executescript(sql)
+
+def _ensure_multiplayer_tables():
+    """Skapa multiplayer-tabeller (games, game_players, game_rounds, guesses) om de saknas."""
+    with _db() as cur:
+        try:
+            if _table_exists(cur, "games"):
+                return
+        except Exception:
+            pass
+    sql_path = APP_DIR / "db" / "create_multiplayer.sql"
+    if not sql_path.exists():
+        raise RuntimeError(f"Saknar SQL-filen: {sql_path}")
+    _run_sql_script(sql_path.read_text(encoding="utf-8"))
+
 # --- Ping ---
 @app.get("/ping")
 def ping():
     return {"ok": True, "msg": "pong", "use_pg": USE_PG, "has_db_url": bool(DB_URL)}
 
-# --- Init DB (tillfällig, kör EN gång) ---
+# --- Init DB (körs manuellt en gång) ---
 @app.post("/__admin/init_db_once")
 async def init_db_once(request: Request):
     token_env = os.environ.get("INIT_TOKEN", "")
     token_req = request.headers.get("X-Init-Token") or request.query_params.get("token")
     if not token_env or token_req != token_env:
         return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
-
-    with _db() as cur:
-        if _table_exists(cur, "games"):
-            return {"ok": True, "message": "Tabeller verkar redan finnas."}
-
-    sql_path = APP_DIR / "db" / "create_multiplayer.sql"
-    if not sql_path.exists():
-        return JSONResponse({"ok": False, "error": f"Saknar {sql_path}"}, status_code=500)
-
     try:
-        sql = sql_path.read_text(encoding="utf-8")
-        with _db() as cur:
-            cur.execute(sql)
+        _ensure_multiplayer_tables()
+        return {"ok": True, "message": "Multiplayer-tabeller skapade eller fanns redan."}
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"SQL-exec fel: {e}"}, status_code=500)
 
-    return {"ok": True, "message": "Multiplayer-tabeller skapade."}
+# --- Debug: lista tabeller (frivilligt) ---
+@app.get("/__admin/tables")
+def list_tables():
+    names = []
+    with _db() as cur:
+        if USE_PG:
+            cur.execute("""SELECT table_name FROM information_schema.tables
+                           WHERE table_schema='public' ORDER BY table_name""")
+            names = [r[0] for r in cur.fetchall()]
+        else:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            names = [dict(r)["name"] for r in cur.fetchall()]
+    return {"tables": names}
 
 # --- Skapa mappar och mounta statiskt ---
 STATIC_DIR.mkdir(exist_ok=True)
-(IMG_DIR).mkdir(parents=True, exist_ok=True)
-(TEMPLATES_DIR).mkdir(parents=True, exist_ok=True)
-
+IMG_DIR.mkdir(parents=True, exist_ok=True)
+TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/img", StaticFiles(directory=str(IMG_DIR)), name="img")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# --- CSV-data ---
+# --- CSV-data (singleplayer) ---
 CITY_FILES = {
     "stockholm": DATA_DIR / "places_stockholm.csv",
     "goteborg":  DATA_DIR / "places_goteborg.csv",
@@ -143,7 +185,6 @@ def load_places():
                         "address_full": address_full,
                     })
         CITY_PLACES[city] = rows
-
 load_places()
 
 # --- Root (servera /static/index.html) ---
@@ -154,7 +195,7 @@ def root(_req: Request):
         return HTMLResponse(index_file.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>Index.html saknas i /static</h1>")
 
-# --- Skapa bas-tabeller om de saknas ---
+# --- Bas-tabeller (feedback/leaderboard) ---
 if USE_PG:
     _exec("""
     CREATE TABLE IF NOT EXISTS feedback (
@@ -262,17 +303,12 @@ def get_leaderboard(limit: int = 50, order: str = "best", city: str | None = Non
     else:
         items = []
         for r in rows:
-            d = dict(r)
-            d["city"] = city_map.get((d.get("city") or "").lower(), d.get("city"))
+            d = dict(r); d["city"] = city_map.get((d.get("city") or "").lower(), d.get("city"))
             items.append(d)
     return {"items": items}
 
-# --- Spel: CSV-källor ---
-CITY_CENTERS = {
-    "stockholm": (59.334, 18.063),
-    "goteborg":  (57.707, 11.967),
-    "malmo":     (55.605, 13.003),
-}
+# --- Singleplayer (API) ---
+CITY_CENTERS = { "stockholm": (59.334, 18.063), "goteborg": (57.707, 11.967), "malmo": (55.605, 13.003) }
 PLACES: dict[str, dict] = {}
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -346,16 +382,6 @@ def api_guess_map(guess: MapGuess):
 # =========================
 # ===== MULTIPLAYER =======
 # =========================
-from pydantic import BaseModel
-from typing import List, Tuple
-
-# --- helpers ---
-def _haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    dlat = radians(lat2 - lat1); dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
-    return 2 * R * asin(sqrt(a))
-
 def _gen_code(n=3) -> str:
     return "".join(random.choice("0123456789") for _ in range(n))
 
@@ -370,13 +396,12 @@ def _unique_code(cur, n=3) -> str:
             return c
 
 def pick_random_places(city: str, n: int) -> List[Tuple[str, float, float]]:
-    """Returnera n slumpade (place_id,lat,lon) från CSV-datan för given stad."""
     key = (city or "").lower().strip()
     rows = CITY_PLACES.get(key) or []
     if not rows:
         raise HTTPException(status_code=400, detail=f"Ingen data för staden: {city!r}")
     chosen = random.sample(rows, k=min(n, len(rows)))
-    out = []
+    out: List[Tuple[str, float, float]] = []
     for r in chosen:
         try:
             lat = float(r["lat"]); lon = float(r["lon"])
@@ -385,7 +410,6 @@ def pick_random_places(city: str, n: int) -> List[Tuple[str, float, float]]:
         pid = (r.get("id") or uuid.uuid4().hex)
         out.append((pid, lat, lon))
     if len(out) < n:
-        # toppa upp med duplicering om CSV är för kort
         while len(out) < n:
             out.append(out[len(out) % max(1, len(out))])
     return out[:n]
@@ -394,7 +418,7 @@ def pick_random_places(city: str, n: int) -> List[Tuple[str, float, float]]:
 class CreateMatchIn(BaseModel):
     host_name: str
     city: str
-    rounds: int = 5  # 1..10 rekommenderat
+    rounds: int = 5
 
 class JoinMatchIn(BaseModel):
     code: str
@@ -406,10 +430,12 @@ class GuessIn(BaseModel):
     lat: float
     lon: float
 
-# --- endpoints ---
-
+# --- Multiplayer endpoints (EN uppsättning) ---
 @app.post("/api/match/create")
 def api_match_create(payload: CreateMatchIn):
+    # Se till att tabeller finns
+    _ensure_multiplayer_tables()
+
     city = (payload.city or "").lower().strip()
     if city not in CITY_PLACES or not CITY_PLACES[city]:
         raise HTTPException(status_code=400, detail="Ogiltig stad eller ingen CSV-data")
@@ -429,7 +455,6 @@ def api_match_create(payload: CreateMatchIn):
                 "INSERT INTO games (code, host_name, city, rounds, status) VALUES (?,?,?,?, 'lobby')",
                 (code, host, city, rounds),
             )
-            # SQLite last insert id
             cur.execute("SELECT last_insert_rowid()")
             game_id = cur.fetchone()[0]
 
@@ -441,10 +466,7 @@ def api_match_create(payload: CreateMatchIn):
             )
         else:
             try:
-                cur.execute(
-                    "INSERT OR IGNORE INTO game_players (game_id,nickname) VALUES (?,?)",
-                    (game_id, host),
-                )
+                cur.execute("INSERT OR IGNORE INTO game_players (game_id,nickname) VALUES (?,?)", (game_id, host))
             except Exception:
                 pass
 
@@ -469,16 +491,10 @@ def api_match_join(payload: JoinMatchIn):
         # lägg till spelare
         try:
             if USE_PG:
-                cur.execute(
-                    "INSERT INTO game_players (game_id,nickname) VALUES (%s,%s) ON CONFLICT DO NOTHING",
-                    (game_id, nick),
-                )
+                cur.execute("INSERT INTO game_players (game_id,nickname) VALUES (%s,%s) ON CONFLICT DO NOTHING", (game_id, nick))
             else:
-                cur.execute(
-                    "INSERT OR IGNORE INTO game_players (game_id,nickname) VALUES (?,?)",
-                    (game_id, nick),
-                )
-        except Exception as e:
+                cur.execute("INSERT OR IGNORE INTO game_players (game_id,nickname) VALUES (?,?)", (game_id, nick))
+        except Exception:
             raise HTTPException(status_code=400, detail="Kunde inte ansluta spelare")
 
     return {"ok": True, "code": code, "nickname": nick}
@@ -570,7 +586,6 @@ def api_match_round(code: str, round_no: int):
             raise HTTPException(status_code=404, detail="Rundan finns inte")
         round_id, place_id, lat, lon = r
 
-    # Vi skickar bara lat/lon efter gissning normalt, men för ditt spel behövs lat/lon på klienten.
     return {"round": {"round_no": int(round_no), "place_id": place_id, "lat": float(lat), "lon": float(lon)}, "status": status}
 
 @app.post("/api/match/guess")
@@ -579,7 +594,7 @@ def api_match_guess(payload: GuessIn, round_no: int):
     nick = (payload.nickname or "").strip()
 
     with _db() as cur:
-        # hämta game + player + round
+        # game
         if USE_PG:
             cur.execute("SELECT id FROM games WHERE code=%s", (code,))
         else:
@@ -589,6 +604,7 @@ def api_match_guess(payload: GuessIn, round_no: int):
             raise HTTPException(status_code=404, detail="Spel hittas inte")
         game_id = g[0]
 
+        # player
         if USE_PG:
             cur.execute("SELECT id FROM game_players WHERE game_id=%s AND nickname=%s", (game_id, nick))
         else:
@@ -598,6 +614,7 @@ def api_match_guess(payload: GuessIn, round_no: int):
             raise HTTPException(status_code=404, detail="Spelare finns inte i detta spel")
         player_id = p[0]
 
+        # round
         if USE_PG:
             cur.execute("SELECT id, lat, lon FROM game_rounds WHERE game_id=%s AND round_no=%s", (game_id, int(round_no)))
         else:
@@ -606,9 +623,9 @@ def api_match_guess(payload: GuessIn, round_no: int):
         if not r:
             raise HTTPException(status_code=404, detail="Rundan finns inte")
         round_id, lat, lon = r
-        dist_m = int(_haversine_km(payload.lat, payload.lon, float(lat), float(lon)) * 1000)
+        dist_m = int(haversine_km(payload.lat, payload.lon, float(lat), float(lon)) * 1000)
 
-        # spara gissning (en per spelare/runda)
+        # save/UPSERT guess
         if USE_PG:
             cur.execute("""
                 INSERT INTO guesses (game_id, round_id, player_id, guess_lat, guess_lon, distance_m)
@@ -617,17 +634,11 @@ def api_match_guess(payload: GuessIn, round_no: int):
                   guess_lat=EXCLUDED.guess_lat, guess_lon=EXCLUDED.guess_lon, distance_m=EXCLUDED.distance_m, created_at=CURRENT_TIMESTAMP
             """, (game_id, round_id, player_id, payload.lat, payload.lon, dist_m))
         else:
-            # SQLite saknar ON CONFLICT target (partial). Gör UPSERT via REPLACE trick:
-            try:
-                cur.execute("""
-                    INSERT OR REPLACE INTO guesses (id, game_id, round_id, player_id, guess_lat, guess_lon, distance_m, created_at)
-                    VALUES (
-                      (SELECT id FROM guesses WHERE round_id=? AND player_id=?),
-                      ?,?,?,?,?,?, datetime('now')
-                    )
-                """, (round_id, player_id, game_id, round_id, player_id, payload.lat, payload.lon, dist_m))
-            except Exception:
-                pass
+            cur.execute("""
+                INSERT OR REPLACE INTO guesses (id, game_id, round_id, player_id, guess_lat, guess_lon, distance_m, created_at)
+                VALUES ((SELECT id FROM guesses WHERE round_id=? AND player_id=?),
+                        ?,?,?,?,?,?, datetime('now'))
+            """, (round_id, player_id, game_id, round_id, player_id, payload.lat, payload.lon, dist_m))
 
     return {"ok": True, "distance_m": dist_m}
 
@@ -688,7 +699,6 @@ def api_match_final(code: str):
             raise HTTPException(status_code=404, detail="Spel hittas inte")
         game_id, rounds = g[0], g[1]
 
-        # summera distans per spelare
         if USE_PG:
             cur.execute("""
                 SELECT gp.nickname, COALESCE(SUM(gu.distance_m), 0) AS total_m, COUNT(gu.id) AS cnt
@@ -709,7 +719,6 @@ def api_match_final(code: str):
             """, (game_id, game_id))
         board = [{"nickname": r[0], "total_m": int(r[1]), "guesses": int(r[2])} for r in cur.fetchall()]
 
-        # markera spelet som finished
         if USE_PG:
             cur.execute("UPDATE games SET status='finished' WHERE id=%s", (game_id,))
         else:
