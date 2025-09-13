@@ -342,3 +342,377 @@ def api_guess_map(guess: MapGuess):
             "address": p.get("address", p.get("street",""))
         }
     }
+
+# =========================
+# ===== MULTIPLAYER =======
+# =========================
+from pydantic import BaseModel
+from typing import List, Tuple
+
+# --- helpers ---
+def _haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = radians(lat2 - lat1); dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
+    return 2 * R * asin(sqrt(a))
+
+def _gen_code(n=3) -> str:
+    return "".join(random.choice("0123456789") for _ in range(n))
+
+def _unique_code(cur, n=3) -> str:
+    while True:
+        c = _gen_code(n)
+        if USE_PG:
+            cur.execute("SELECT 1 FROM games WHERE code=%s LIMIT 1", (c,))
+        else:
+            cur.execute("SELECT 1 FROM games WHERE code=? LIMIT 1", (c,))
+        if not cur.fetchone():
+            return c
+
+def pick_random_places(city: str, n: int) -> List[Tuple[str, float, float]]:
+    """Returnera n slumpade (place_id,lat,lon) från CSV-datan för given stad."""
+    key = (city or "").lower().strip()
+    rows = CITY_PLACES.get(key) or []
+    if not rows:
+        raise HTTPException(status_code=400, detail=f"Ingen data för staden: {city!r}")
+    chosen = random.sample(rows, k=min(n, len(rows)))
+    out = []
+    for r in chosen:
+        try:
+            lat = float(r["lat"]); lon = float(r["lon"])
+        except Exception:
+            continue
+        pid = (r.get("id") or uuid.uuid4().hex)
+        out.append((pid, lat, lon))
+    if len(out) < n:
+        # toppa upp med duplicering om CSV är för kort
+        while len(out) < n:
+            out.append(out[len(out) % max(1, len(out))])
+    return out[:n]
+
+# --- request models ---
+class CreateMatchIn(BaseModel):
+    host_name: str
+    city: str
+    rounds: int = 5  # 1..10 rekommenderat
+
+class JoinMatchIn(BaseModel):
+    code: str
+    nickname: str
+
+class GuessIn(BaseModel):
+    code: str
+    nickname: str
+    lat: float
+    lon: float
+
+# --- endpoints ---
+
+@app.post("/api/match/create")
+def api_match_create(payload: CreateMatchIn):
+    city = (payload.city or "").lower().strip()
+    if city not in CITY_PLACES or not CITY_PLACES[city]:
+        raise HTTPException(status_code=400, detail="Ogiltig stad eller ingen CSV-data")
+    rounds = max(1, min(int(payload.rounds), 20))
+    host = (payload.host_name or "Host").strip()[:40]
+
+    with _db() as cur:
+        code = _unique_code(cur, 3)
+        if USE_PG:
+            cur.execute(
+                "INSERT INTO games (code, host_name, city, rounds, status) VALUES (%s,%s,%s,%s,'lobby') RETURNING id",
+                (code, host, city, rounds),
+            )
+            game_id = cur.fetchone()[0]
+        else:
+            cur.execute(
+                "INSERT INTO games (code, host_name, city, rounds, status) VALUES (?,?,?,?, 'lobby')",
+                (code, host, city, rounds),
+            )
+            # SQLite last insert id
+            cur.execute("SELECT last_insert_rowid()")
+            game_id = cur.fetchone()[0]
+
+        # hosten auto-joinas
+        if USE_PG:
+            cur.execute(
+                "INSERT INTO game_players (game_id,nickname) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                (game_id, host),
+            )
+        else:
+            try:
+                cur.execute(
+                    "INSERT OR IGNORE INTO game_players (game_id,nickname) VALUES (?,?)",
+                    (game_id, host),
+                )
+            except Exception:
+                pass
+
+    return {"ok": True, "code": code, "game_id": game_id, "city": city, "rounds": rounds, "status": "lobby"}
+
+@app.post("/api/match/join")
+def api_match_join(payload: JoinMatchIn):
+    code = (payload.code or "").strip()
+    nick = (payload.nickname or "").strip()[:40]
+    with _db() as cur:
+        if USE_PG:
+            cur.execute("SELECT id,status FROM games WHERE code=%s", (code,))
+        else:
+            cur.execute("SELECT id,status FROM games WHERE code=?", (code,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Spel hittas inte")
+        game_id, status = (row[0], row[1])
+        if status not in ("lobby", "active"):
+            raise HTTPException(status_code=400, detail=f"Spelet är {status}")
+
+        # lägg till spelare
+        try:
+            if USE_PG:
+                cur.execute(
+                    "INSERT INTO game_players (game_id,nickname) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                    (game_id, nick),
+                )
+            else:
+                cur.execute(
+                    "INSERT OR IGNORE INTO game_players (game_id,nickname) VALUES (?,?)",
+                    (game_id, nick),
+                )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="Kunde inte ansluta spelare")
+
+    return {"ok": True, "code": code, "nickname": nick}
+
+@app.get("/api/match/lobby")
+def api_match_lobby(code: str):
+    code = (code or "").strip()
+    with _db() as cur:
+        if USE_PG:
+            cur.execute("SELECT id, city, rounds, status FROM games WHERE code=%s", (code,))
+        else:
+            cur.execute("SELECT id, city, rounds, status FROM games WHERE code=?", (code,))
+        g = cur.fetchone()
+        if not g:
+            raise HTTPException(status_code=404, detail="Spel hittas inte")
+        game_id, city, rounds, status = g[0], g[1], g[2], g[3]
+
+        if USE_PG:
+            cur.execute("SELECT nickname FROM game_players WHERE game_id=%s ORDER BY joined_at", (game_id,))
+        else:
+            cur.execute("SELECT nickname FROM game_players WHERE game_id=? ORDER BY joined_at", (game_id,))
+        players = [r[0] for r in cur.fetchall()]
+
+    return {"code": code, "city": city, "rounds": rounds, "status": status, "players": players}
+
+@app.post("/api/match/start")
+def api_match_start(code: str):
+    code = (code or "").strip()
+    with _db() as cur:
+        if USE_PG:
+            cur.execute("SELECT id, city, rounds, status FROM games WHERE code=%s", (code,))
+        else:
+            cur.execute("SELECT id, city, rounds, status FROM games WHERE code=?", (code,))
+        g = cur.fetchone()
+        if not g:
+            raise HTTPException(status_code=404, detail="Spel hittas inte")
+        game_id, city, rounds, status = g[0], g[1], g[2], g[3]
+
+        # skapa rundor om inte redan finns
+        if USE_PG:
+            cur.execute("SELECT COUNT(*) FROM game_rounds WHERE game_id=%s", (game_id,))
+        else:
+            cur.execute("SELECT COUNT(*) FROM game_rounds WHERE game_id=?", (game_id,))
+        has = (cur.fetchone() or [0])[0]
+
+        if not has:
+            places = pick_random_places(city, rounds)
+            for i, (pid, lat, lon) in enumerate(places, start=1):
+                if USE_PG:
+                    cur.execute(
+                        "INSERT INTO game_rounds (game_id, round_no, place_id, lat, lon, started_at) VALUES (%s,%s,%s,%s,%s, CURRENT_TIMESTAMP)",
+                        (game_id, i, pid, lat, lon),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO game_rounds (game_id, round_no, place_id, lat, lon, started_at) VALUES (?,?,?,?,?, datetime('now'))",
+                        (game_id, i, pid, lat, lon),
+                    )
+
+        # sätt status active
+        if USE_PG:
+            cur.execute("UPDATE games SET status='active' WHERE id=%s", (game_id,))
+        else:
+            cur.execute("UPDATE games SET status='active' WHERE id=?", (game_id,))
+
+    return {"ok": True}
+
+@app.get("/api/match/round")
+def api_match_round(code: str, round_no: int):
+    code = (code or "").strip()
+    with _db() as cur:
+        if USE_PG:
+            cur.execute("SELECT id, status FROM games WHERE code=%s", (code,))
+        else:
+            cur.execute("SELECT id, status FROM games WHERE code=?", (code,))
+        g = cur.fetchone()
+        if not g:
+            raise HTTPException(status_code=404, detail="Spel hittas inte")
+        game_id, status = g[0], g[1]
+
+        if USE_PG:
+            cur.execute("SELECT id, place_id, lat, lon FROM game_rounds WHERE game_id=%s AND round_no=%s",
+                        (game_id, int(round_no)))
+        else:
+            cur.execute("SELECT id, place_id, lat, lon FROM game_rounds WHERE game_id=? AND round_no=?",
+                        (game_id, int(round_no)))
+        r = cur.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Rundan finns inte")
+        round_id, place_id, lat, lon = r
+
+    # Vi skickar bara lat/lon efter gissning normalt, men för ditt spel behövs lat/lon på klienten.
+    return {"round": {"round_no": int(round_no), "place_id": place_id, "lat": float(lat), "lon": float(lon)}, "status": status}
+
+@app.post("/api/match/guess")
+def api_match_guess(payload: GuessIn, round_no: int):
+    code = (payload.code or "").strip()
+    nick = (payload.nickname or "").strip()
+
+    with _db() as cur:
+        # hämta game + player + round
+        if USE_PG:
+            cur.execute("SELECT id FROM games WHERE code=%s", (code,))
+        else:
+            cur.execute("SELECT id FROM games WHERE code=?", (code,))
+        g = cur.fetchone()
+        if not g:
+            raise HTTPException(status_code=404, detail="Spel hittas inte")
+        game_id = g[0]
+
+        if USE_PG:
+            cur.execute("SELECT id FROM game_players WHERE game_id=%s AND nickname=%s", (game_id, nick))
+        else:
+            cur.execute("SELECT id FROM game_players WHERE game_id=? AND nickname=?", (game_id, nick))
+        p = cur.fetchone()
+        if not p:
+            raise HTTPException(status_code=404, detail="Spelare finns inte i detta spel")
+        player_id = p[0]
+
+        if USE_PG:
+            cur.execute("SELECT id, lat, lon FROM game_rounds WHERE game_id=%s AND round_no=%s", (game_id, int(round_no)))
+        else:
+            cur.execute("SELECT id, lat, lon FROM game_rounds WHERE game_id=? AND round_no=?", (game_id, int(round_no)))
+        r = cur.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Rundan finns inte")
+        round_id, lat, lon = r
+        dist_m = int(_haversine_km(payload.lat, payload.lon, float(lat), float(lon)) * 1000)
+
+        # spara gissning (en per spelare/runda)
+        if USE_PG:
+            cur.execute("""
+                INSERT INTO guesses (game_id, round_id, player_id, guess_lat, guess_lon, distance_m)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (round_id, player_id) DO UPDATE SET
+                  guess_lat=EXCLUDED.guess_lat, guess_lon=EXCLUDED.guess_lon, distance_m=EXCLUDED.distance_m, created_at=CURRENT_TIMESTAMP
+            """, (game_id, round_id, player_id, payload.lat, payload.lon, dist_m))
+        else:
+            # SQLite saknar ON CONFLICT target (partial). Gör UPSERT via REPLACE trick:
+            try:
+                cur.execute("""
+                    INSERT OR REPLACE INTO guesses (id, game_id, round_id, player_id, guess_lat, guess_lon, distance_m, created_at)
+                    VALUES (
+                      (SELECT id FROM guesses WHERE round_id=? AND player_id=?),
+                      ?,?,?,?,?,?, datetime('now')
+                    )
+                """, (round_id, player_id, game_id, round_id, player_id, payload.lat, payload.lon, dist_m))
+            except Exception:
+                pass
+
+    return {"ok": True, "distance_m": dist_m}
+
+@app.get("/api/match/round_result")
+def api_match_round_result(code: str, round_no: int):
+    code = (code or "").strip()
+    with _db() as cur:
+        if USE_PG:
+            cur.execute("SELECT id FROM games WHERE code=%s", (code,))
+        else:
+            cur.execute("SELECT id FROM games WHERE code=?", (code,))
+        g = cur.fetchone()
+        if not g:
+            raise HTTPException(status_code=404, detail="Spel hittas inte")
+        game_id = g[0]
+
+        if USE_PG:
+            cur.execute("SELECT id, lat, lon FROM game_rounds WHERE game_id=%s AND round_no=%s",
+                        (game_id, int(round_no)))
+        else:
+            cur.execute("SELECT id, lat, lon FROM game_rounds WHERE game_id=? AND round_no=?",
+                        (game_id, int(round_no)))
+        r = cur.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Rundan finns inte")
+        round_id, lat, lon = r
+
+        if USE_PG:
+            cur.execute("""
+                SELECT gp.nickname, gu.distance_m
+                FROM guesses gu
+                JOIN game_players gp ON gp.id = gu.player_id
+                WHERE gu.round_id=%s
+                ORDER BY gu.distance_m ASC
+            """, (round_id,))
+        else:
+            cur.execute("""
+                SELECT gp.nickname, gu.distance_m
+                FROM guesses gu
+                JOIN game_players gp ON gp.id = gu.player_id
+                WHERE gu.round_id=?
+                ORDER BY gu.distance_m ASC
+            """, (round_id,))
+        board = [{"nickname": row[0], "distance_m": row[1]} for row in cur.fetchall()]
+
+    return {"round_no": int(round_no), "solution": {"lat": float(lat), "lon": float(lon)}, "leaderboard": board}
+
+@app.get("/api/match/final")
+def api_match_final(code: str):
+    code = (code or "").strip()
+    with _db() as cur:
+        if USE_PG:
+            cur.execute("SELECT id, rounds FROM games WHERE code=%s", (code,))
+        else:
+            cur.execute("SELECT id, rounds FROM games WHERE code=?", (code,))
+        g = cur.fetchone()
+        if not g:
+            raise HTTPException(status_code=404, detail="Spel hittas inte")
+        game_id, rounds = g[0], g[1]
+
+        # summera distans per spelare
+        if USE_PG:
+            cur.execute("""
+                SELECT gp.nickname, COALESCE(SUM(gu.distance_m), 0) AS total_m, COUNT(gu.id) AS cnt
+                FROM game_players gp
+                LEFT JOIN guesses gu ON gu.player_id = gp.id AND gu.game_id = %s
+                WHERE gp.game_id = %s
+                GROUP BY gp.nickname
+                ORDER BY total_m ASC
+            """, (game_id, game_id))
+        else:
+            cur.execute("""
+                SELECT gp.nickname, IFNULL(SUM(gu.distance_m), 0) AS total_m, COUNT(gu.id) AS cnt
+                FROM game_players gp
+                LEFT JOIN guesses gu ON gu.player_id = gp.id AND gu.game_id = ?
+                WHERE gp.game_id = ?
+                GROUP BY gp.nickname
+                ORDER BY total_m ASC
+            """, (game_id, game_id))
+        board = [{"nickname": r[0], "total_m": int(r[1]), "guesses": int(r[2])} for r in cur.fetchall()]
+
+        # markera spelet som finished
+        if USE_PG:
+            cur.execute("UPDATE games SET status='finished' WHERE id=%s", (game_id,))
+        else:
+            cur.execute("UPDATE games SET status='finished' WHERE id=?", (game_id,))
+
+    return {"rounds": rounds, "final": board}
