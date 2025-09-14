@@ -85,17 +85,23 @@ function setMapLocked(flag){
 
 // ===== Kartklick => gissning =====
 window.onMapClick = async (lat, lon) => {
-  if(vGame?.style.display==='block' && !S.hasGuessed && !S.mapLocked){
-    // RITA DIN MARKÖR DIREKT
+  if (vGame?.style.display==='block' && !S.hasGuessed && !S.mapLocked){
     try{
       const layer = ensureRoundLayer();
-      if (window.guessMarker) layer.removeLayer(window.guessMarker);
-      window.guessMarker = L.marker([lat, lon], { title: 'Din gissning' }).addTo(layer);
-    }catch{}
+      if (window.guessMarker) {
+        (layer || window.map).removeLayer(window.guessMarker);
+      }
+      window.guessMarker = L.marker([lat, lon], { title: 'Din gissning' })
+        .addTo(layer || window.map);  // fallback till map om layer saknas
+    }catch(e){
+      console.warn('Kunde inte rita egen markör:', e);
+    }
     await sendGuess(lat, lon);
   }
 };
 
+
+// ===== Lobby (visa & polla tills spelet startar) =====
 // ===== Lobby (visa & polla tills spelet startar) =====
 async function enterLobby(){
   clearInterval(S.pollTimer);
@@ -105,28 +111,47 @@ async function enterLobby(){
   vGame.style.display='none';
   vFinal.style.display='none';
 
-  // Läs initial info (spelare mm)
+  // Visa väntemeddelande
+  if (!document.getElementById('mpLobbyMsg')) {
+    const p = document.createElement('p');
+    p.id = 'mpLobbyMsg';
+    p.style.marginTop = '12px';
+    p.innerHTML = `<em>Inväntar att värden ska starta spelet…</em>`;
+    vLobby.appendChild(p);
+  } else {
+    document.getElementById('mpLobbyMsg').innerHTML = `<em>Inväntar att värden ska starta spelet…</em>`;
+  }
+
+  const detectRoundStarted = async ()=>{
+    try{
+      const rr = await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
+      return !!rr?.round; // om servern redan exponerar ronden
+    }catch{ return false; }
+  };
+
+  // Försök initialt
   try{
     const r = await fetchJson(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
     if(r?.players) S.players = r.players;
-    if(r?.status === 'active'){
-      // Värden hann redan starta – hoppa direkt in
+    if (r?.status === 'active' || await detectRoundStarted()){
       return await enterRound();
     }
   }catch{}
 
-  // Polla lobbyn – när status==active -> in i runda
+  // Polla lobbyn – när status==active ELLER rond hittas -> in i runda
+  clearInterval(S.pollTimer);
   S.pollTimer = setInterval(async ()=>{
     try{
       const r = await fetchJson(`/api/match/lobby?code=${encodeURIComponent(S.code)}`);
       if(r?.players) S.players = r.players;
-      if(r?.status === 'active'){
+      if (r?.status === 'active' || await detectRoundStarted()){
         clearInterval(S.pollTimer);
         await enterRound();
       }
     }catch{}
-  }, 2000);
+  }, 1500);
 }
+
 
 // ===== Starta en runda =====
 async function enterRound(){
@@ -271,17 +296,21 @@ async function refreshRoundBoard(){
   const board = Array.isArray(res?.leaderboard) ? res.leaderboard : [];
   renderRoundBoard(board);
 
-  const doneCount = board.length;
-  const total = S.players.length;
+  // Räkna unika som är klara (skydd mot dubletter)
+  const doneSet = new Set(board.map(r => r.nickname));
+  const doneCount = doneSet.size;
+  const total = new Set(S.players || []).size;
 
-  if(doneCount>=total && total>0){
+  if (doneCount >= total && total > 0){
     clearInterval(S.pollTimer);
     clearInterval(S.countdownTimer);
-    await showSolutionAndButtons(res);
-  }else{
-    if($('#info')) $('#info').innerHTML = `Väntar på övriga: <strong>${doneCount}/${total}</strong> spelare klara.`;
+    await showSolutionAndButtons(res);  // auto-reveal + auto-next
+  } else {
+    if ($('#info')) {
+      $('#info').innerHTML = `Väntar på övriga: <strong>${doneCount}/${total}</strong> spelare klara.`;
+    }
   }
-}
+
 function renderRoundBoard(board){
   const doneBy = new Map(board.map(r=>[r.nickname, r.distance_m]));
   const rows = S.players.map(p=>{
@@ -332,7 +361,6 @@ async function showSolutionAndButtons(res){
     }
   }
 
-  // === GÖM "Nästa runda"-knappen och KÖR AUTO-NEDRÄKNING ===
   // === GÖM "Nästa runda"-knappen och KÖR AUTO-NEDRÄKNING ===
   btnNextRound.style.display = 'none';
   btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
