@@ -31,10 +31,10 @@ const vFinal = $('#mp-final');
 const gRoundNo = $('#gRoundNo');
 const gCode    = $('#gCode');
 const mpYou    = $('#mpYou');
-const tblBody  = $('#mpRoundTable tbody');  // vi gömmer tabellen, men låter referensen finnas
+const tblBody  = $('#mpRoundTable tbody');  // döljs i MP
 const btnNextRound = $('#btnNextRound');
-const btnFinal     = $('#btnFinal');
-const mpTimerEl    = $('#mpTimer');         // vi gömmer den (vi visar tid i panelen)
+const btnFinal     = $('#btnFinal');        // döljs helt
+const mpTimerEl    = $('#mpTimer');         // döljs (tid visas i panelen)
 
 // ===== Global state =====
 const S = {
@@ -44,13 +44,13 @@ const S = {
   mapLocked: false,
   finished: false,
   revealCountdown: null,
-  autoNextTimer: null,
   // Sidebar-data
   roundBoards: {},        // { [roundNo]: [{nickname, distance_m}] }
   currentClue: '',
   answerText: null,
   distanceText: null,
-  nextRoundLeft: null,    // sekunder tills nästa runda vid reveal
+  nextRoundLeft: null,    // sekunder tills nästa runda / final vid reveal
+  roundRevealed: false,   // om facit för aktuell runda är visat
 };
 
 // ===== Lager & städfunktion för rundgrafik =====
@@ -90,10 +90,25 @@ function setMapLocked(flag){
   }
 }
 
-// ===== Totals & Sidebar-render (TOP-LEVEL) =====
+// ===== Dölja singelplayer-grejer och mittentabellen =====
+function hideSPBits(){
+  const infoBox = $('#info');
+  if (infoBox) { try{ infoBox.remove(); }catch{ infoBox.style.display='none'; } }
+  const roundTable = document.getElementById('mpRoundTable');
+  if (roundTable) roundTable.style.display = 'none';
+  if (mpTimerEl) mpTimerEl.style.display = 'none';
+  if (btnFinal) btnFinal.style.display = 'none'; // ta bort knappen "Visa slutresultat"
+}
+
+// ===== Totals & Sidebar-render =====
 function computeTotals(){
   const totals = new Map(); // nickname -> total_m
-  Object.values(S.roundBoards).forEach(arr=>{
+  Object.entries(S.roundBoards).forEach(([roundNo, arr])=>{
+    const rn = Number(roundNo);
+    if (!Number.isFinite(rn)) return;
+    // räkna bara färdiga rundor; för aktuell runda endast när reveal skett
+    if (rn > S.roundNo) return;
+    if (rn === S.roundNo && !S.roundRevealed) return;
     (arr||[]).forEach(r=>{
       if (typeof r.distance_m === 'number') {
         totals.set(r.nickname, (totals.get(r.nickname)||0) + r.distance_m);
@@ -113,13 +128,24 @@ function renderSidebar(){
   const mm = String(Math.floor(t/60)).padStart(2,'0');
   const ss = String(t%60).padStart(2,'0');
 
-  // Omgångens resultat
-  const roundArr = (S.roundBoards[S.roundNo]||[]).slice().sort((a,b)=>a.distance_m-b.distance_m);
-  const roundList = roundArr.map(r=>`<li>${esc(r.nickname)} – ${r.distance_m} m</li>`).join('') || '<li>—</li>';
+  let roundListHtml = '<li>—</li>';
+  if (!S.roundRevealed){
+    // Visa endast "Klar/Väntar…" under pågående omgång
+    const doneSet = new Set((S.roundBoards[S.roundNo]||[]).map(r=>r.nickname));
+    const items = (S.players||[]).map(n=>{
+      const done = doneSet.has(n);
+      return `<li>${esc(n)} – ${done ? 'Klar' : 'Väntar…'}</li>`;
+    });
+    roundListHtml = items.join('') || '<li>—</li>';
+  } else {
+    // Visa avstånd först NÄR omgången är klar
+    const arr = (S.roundBoards[S.roundNo]||[]).slice().sort((a,b)=>a.distance_m-b.distance_m);
+    roundListHtml = arr.map(r=>`<li>${esc(r.nickname)} – ${r.distance_m} m</li>`).join('') || '<li>—</li>';
+  }
 
-  // Totalt
+  // Totalt (utan dubbel numrering)
   const totals = computeTotals();
-  const totalsList = totals.map((r,i)=>`<li>${i+1}. ${esc(r.nickname)} – ${r.total_m} m</li>`).join('') || '<li>—</li>';
+  const totalsList = totals.map(r=>`<li>${esc(r.nickname)} – ${r.total_m} m</li>`).join('') || '<li>—</li>';
 
   // Facit/avstånd
   const answerBlock = S.answerText ? `
@@ -128,19 +154,20 @@ function renderSidebar(){
     <div style="height:8px"></div>
   ` : '';
 
-  // “Ny runda startar om …”
+  // “Ny runda / slutresultat om …”
   const nextMsg = (S.nextRoundLeft!=null)
-    ? `<div class="sub"><em>Ny runda startar om: ${S.nextRoundLeft}s</em></div>`
+    ? `<div class="sub"><em>${S.roundNo >= S.rounds ? 'Slutresultat visas om' : 'Ny runda startar om'}: ${S.nextRoundLeft}s</em></div>`
     : '';
 
   mpYou.innerHTML = `
     <div class="mp-panel">
+      <div class="row"><strong>Runda ${S.roundNo}</strong> • <strong>Kod ${esc(S.code)}</strong></div>
       <div class="row"><span class="lbl">Ledtråd:</span> <span id="mpClueText">${esc(S.currentClue||'')}</span></div>
       <div class="row"><span class="lbl">Tid:</span> <span id="mpTimeText">${mm}:${ss}</span></div>
       ${answerBlock}
       ${nextMsg}
       <div class="sub">Omgång ${S.roundNo}: resultat</div>
-      <ol id="mpRoundBoard">${roundList}</ol>
+      <ol id="mpRoundBoard">${roundListHtml}</ol>
       <div style="height:10px"></div>
       <div class="sub">Totalställning</div>
       <ol id="mpTotalsBoard">${totalsList}</ol>
@@ -161,15 +188,6 @@ window.onMapClick = async (lat, lon) => {
   }
 };
 
-// ===== Hjälpfunktion: göm singelplayer-grejer + mittentabell + header-klocka =====
-function hideSPBits(){
-  const infoBox = $('#info');
-  if (infoBox) infoBox.style.display = 'none';
-  const roundTable = document.getElementById('mpRoundTable');
-  if (roundTable) roundTable.style.display = 'none';
-  if (mpTimerEl) mpTimerEl.style.display = 'none';
-}
-
 // ===== Lobby (visa & polla tills spelet startar) =====
 async function enterLobby(){
   clearInterval(S.pollTimer);
@@ -184,6 +202,7 @@ async function enterLobby(){
   S.answerText = null;
   S.distanceText = null;
   S.nextRoundLeft = null;
+  S.roundRevealed = false;
   renderSidebar();
 
   vLobby.style.display = 'block';
@@ -240,15 +259,7 @@ async function enterRound(){
   // Om vi redan passerat sista rundan -> visa final
   if (S.roundNo > S.rounds) {
     S.finished = true;
-    try{
-      const res = await fetchJson(`/api/match/final?code=${encodeURIComponent(S.code)}`);
-      vLobby.style.display='none';
-      vGame.style.display='none';
-      vFinal.style.display='block';
-      $('#finalBoard').innerHTML = (res.final||[]).map((r,i)=>`<li>${i+1}. ${esc(r.nickname)} – ${r.total_m} m</li>`).join('');
-    }catch(e){
-      alert('Kunde inte hämta slutresultat: ' + e.message);
-    }
+    await showFinal();
     return;
   }
 
@@ -257,9 +268,9 @@ async function enterRound(){
   S.answerText = null;
   S.distanceText = null;
   S.nextRoundLeft = null;
+  S.roundRevealed = false;
 
   clearRoundGraphics();
-  if (S.autoNextTimer){ clearInterval(S.autoNextTimer); S.autoNextTimer = null; }
   if (S.revealCountdown){ clearInterval(S.revealCountdown); S.revealCountdown = null; }
 
   setMapLocked(false);
@@ -314,7 +325,6 @@ function startCountdown(){
   },1000);
 }
 function updateTimer(){
-  // vi uppdaterar inte mpTimerEl längre, allt sker i panelen
   renderSidebar(); // uppdatera tiden i panelen
 }
 async function autoGuessBecauseTimeout(){
@@ -340,7 +350,7 @@ async function sendGuess(lat, lon){
     S.hasGuessed = true;
     S.myGuess = {lat, lon};
     setMapLocked(true); // LÅS kartan efter gissning
-    renderSidebar();     // visa aktuell panel
+    renderSidebar();
     await refreshRoundBoard();
   }catch(e){
     alert('Kunde inte skicka gissning: ' + e.message);
@@ -373,8 +383,7 @@ async function refreshRoundBoard(){
   const uniq = Array.from(board.reduce((m, r)=> m.set(r.nickname, r), new Map()).values());
   S.roundBoards[S.roundNo] = uniq;
 
-  // Vi uppdaterar bara sidopanelen numera
-  renderSidebar();
+  renderSidebar(); // uppdatera panelen (utan att visa avstånd om ej reveal)
 
   // räkna klara
   const doneSet = new Set(uniq.map(r => r.nickname));
@@ -384,21 +393,14 @@ async function refreshRoundBoard(){
   if (doneCount >= total && total > 0){
     clearInterval(S.pollTimer);
     clearInterval(S.countdownTimer);
-    await showSolutionAndButtons(res);  // auto-reveal + auto-next
+    await showSolutionAndButtons(res);  // auto-reveal + auto-next/final
   }
 }
 
-// (kvar för kompatibilitet – men döljs i UI)
-function renderRoundBoard(board){
-  // Vi har tagit bort mittentabellen i MP-flödet.
-  if (!tblBody) return;
-  const table = document.getElementById('mpRoundTable');
-  if (table) table.style.display = 'none';
-}
-
-// ===== Facit + knappar =====
+// ===== Facit + nästa/final =====
 async function showSolutionAndButtons(res){
   const sol = res?.solution;
+  S.roundRevealed = true; // nu får vi visa avstånd i panelen
 
   // RITA FACIT + DIN GISSNING + LINJE
   if (sol?.lat!=null && sol?.lon!=null){
@@ -425,55 +427,50 @@ async function showSolutionAndButtons(res){
       const dkm = haversineKm(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon);
       S.answerText = (sol.address || '').trim() || null;
       S.distanceText = `${dkm.toFixed(2)} km`;
-      renderSidebar();
     }
   }
 
-  // Dölj “Nästa runda”-knappen; visa Final-knapp på sista
-  if (btnNextRound) btnNextRound.style.display = 'none';
-  if (btnFinal)     btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
-
-  // Om spelet är slut – markera och lämna
-  if (S.roundNo >= S.rounds) {
-    S.finished = true;
-    if (btnNextRound) btnNextRound.disabled = true;
-    return;
-  }
-
-  // 10s countdown till nästa runda (visa i panelen)
+  // Countdown -> nästa runda eller final (utan knapp)
   S.nextRoundLeft = 10;
   renderSidebar();
 
   if (S.revealCountdown) clearInterval(S.revealCountdown);
-  S.revealCountdown = setInterval(()=>{
+  S.revealCountdown = setInterval(async ()=>{
     S.nextRoundLeft -= 1;
     if (S.nextRoundLeft <= 0){
       clearInterval(S.revealCountdown);
       S.revealCountdown = null;
       S.nextRoundLeft = null;
-      S.roundNo += 1;
-      renderSidebar();
-      enterRound();
+
+      if (S.roundNo >= S.rounds){
+        await showFinal();            // visa slutresultat automatiskt
+      }else{
+        S.roundNo += 1;
+        await enterRound();
+      }
     }else{
       renderSidebar();
     }
   }, 1000);
 }
 
-// ===== Knappar =====
-btnNextRound?.addEventListener('click', async ()=>{
-  if (S.roundNo >= S.rounds) return; // spärr
-  S.roundNo += 1;
-  await enterRound();
-});
-btnFinal?.addEventListener('click', async ()=>{
+// ===== Final =====
+async function showFinal(){
   try{
     const res = await fetchJson(`/api/match/final?code=${encodeURIComponent(S.code)}`);
     vGame.style.display='none';
     vFinal.style.display='block';
     $('#finalBoard').innerHTML = (res.final||[]).map((r,i)=>`<li>${i+1}. ${esc(r.nickname)} – ${r.total_m} m</li>`).join('');
   }catch(e){ alert('Kunde inte hämta slutresultat: '+e.message); }
+}
+
+// ===== Knappar (btnFinal döljs; kvar för safety om den finns) =====
+btnNextRound?.addEventListener('click', async ()=>{
+  if (S.roundNo >= S.rounds) { await showFinal(); return; }
+  S.roundNo += 1;
+  await enterRound();
 });
+btnFinal?.addEventListener('click', async ()=>{ await showFinal(); });
 
 // ===== Publika hjälpare =====
 window.Utmana = {
