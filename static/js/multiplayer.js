@@ -31,10 +31,10 @@ const vFinal = $('#mp-final');
 const gRoundNo = $('#gRoundNo');
 const gCode    = $('#gCode');
 const mpYou    = $('#mpYou');
-const tblBody  = $('#mpRoundTable tbody');
+const tblBody  = $('#mpRoundTable tbody');  // vi gömmer tabellen, men låter referensen finnas
 const btnNextRound = $('#btnNextRound');
 const btnFinal     = $('#btnFinal');
-const mpTimerEl    = $('#mpTimer');
+const mpTimerEl    = $('#mpTimer');         // vi gömmer den (vi visar tid i panelen)
 
 // ===== Global state =====
 const S = {
@@ -90,7 +90,7 @@ function setMapLocked(flag){
   }
 }
 
-// ===== Totals & Sidebar-render =====
+// ===== Totals & Sidebar-render (TOP-LEVEL) =====
 function computeTotals(){
   const totals = new Map(); // nickname -> total_m
   Object.values(S.roundBoards).forEach(arr=>{
@@ -161,15 +161,22 @@ window.onMapClick = async (lat, lon) => {
   }
 };
 
+// ===== Hjälpfunktion: göm singelplayer-grejer + mittentabell + header-klocka =====
+function hideSPBits(){
+  const infoBox = $('#info');
+  if (infoBox) infoBox.style.display = 'none';
+  const roundTable = document.getElementById('mpRoundTable');
+  if (roundTable) roundTable.style.display = 'none';
+  if (mpTimerEl) mpTimerEl.style.display = 'none';
+}
+
 // ===== Lobby (visa & polla tills spelet startar) =====
 async function enterLobby(){
   clearInterval(S.pollTimer);
   clearInterval(S.countdownTimer);
   if (!S.roundNo) S.roundNo = 1;
 
-  // Göm ev. singelplayer-infobox i MP
-  const infoBox = $('#info');
-  if (infoBox) infoBox.style.display = 'none';
+  hideSPBits();
 
   // Nollställ sidebar-data
   S.roundBoards = {};
@@ -261,6 +268,8 @@ async function enterRound(){
   vFinal.style.display='none';
   vGame.style.display='block';
 
+  hideSPBits();
+
   // säkerställ att kartan lyssnar på klick (bind en gång)
   if (window.map && !window.map._mpClickBound){
     window.map.on('click', e => window.onMapClick(e.latlng.lat, e.latlng.lng));
@@ -305,10 +314,7 @@ function startCountdown(){
   },1000);
 }
 function updateTimer(){
-  const t = Math.max(0, S.timeLeft);
-  const mm = String(Math.floor(t/60)).padStart(2,'0');
-  const ss = String(t%60).padStart(2,'0');
-  if(mpTimerEl) mpTimerEl.textContent = `${mm}:${ss}`;
+  // vi uppdaterar inte mpTimerEl längre, allt sker i panelen
   renderSidebar(); // uppdatera tiden i panelen
 }
 async function autoGuessBecauseTimeout(){
@@ -334,7 +340,7 @@ async function sendGuess(lat, lon){
     S.hasGuessed = true;
     S.myGuess = {lat, lon};
     setMapLocked(true); // LÅS kartan efter gissning
-    renderSidebar();     // låt panelen visa timer/leaderboard, inga separata texter här
+    renderSidebar();     // visa aktuell panel
     await refreshRoundBoard();
   }catch(e){
     alert('Kunde inte skicka gissning: ' + e.message);
@@ -367,8 +373,8 @@ async function refreshRoundBoard(){
   const uniq = Array.from(board.reduce((m, r)=> m.set(r.nickname, r), new Map()).values());
   S.roundBoards[S.roundNo] = uniq;
 
-  renderRoundBoard(uniq); // för mittentabellen om du visar den
-  renderSidebar();        // uppdatera panelen
+  // Vi uppdaterar bara sidopanelen numera
+  renderSidebar();
 
   // räkna klara
   const doneSet = new Set(uniq.map(r => r.nickname));
@@ -382,15 +388,12 @@ async function refreshRoundBoard(){
   }
 }
 
+// (kvar för kompatibilitet – men döljs i UI)
 function renderRoundBoard(board){
-  const doneBy = new Map(board.map(r=>[r.nickname, r.distance_m]));
-  const rows = S.players.map(p=>{
-    const dist = doneBy.get(p);
-    const status = dist!=null ? `<span class="badge badge-done">Klar</span>` : `<span class="badge badge-wait">Väntar ...</span>`;
-    const distTxt = dist!=null ? `${dist} m` : '–';
-    return `<tr><td>${esc(p)}</td><td>${status}</td><td>${distTxt}</td></tr>`;
-  });
-  if (tblBody) tblBody.innerHTML = rows.join('');
+  // Vi har tagit bort mittentabellen i MP-flödet.
+  if (!tblBody) return;
+  const table = document.getElementById('mpRoundTable');
+  if (table) table.style.display = 'none';
 }
 
 // ===== Facit + knappar =====
@@ -417,6 +420,7 @@ async function showSolutionAndButtons(res){
         map.fitBounds(window.line.getBounds(), { padding:[30,30] });
       }
     }catch{}
+
     if (S.myGuess){
       const dkm = haversineKm(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon);
       S.answerText = (sol.address || '').trim() || null;
