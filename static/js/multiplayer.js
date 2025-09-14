@@ -275,15 +275,12 @@ async function showSolutionAndButtons(res){
         (addr ? ` · <strong>Rätt adress:</strong> ${esc(addr)}` : '') +
         `.`;
     }
-  }
-  btnNextRound.style.display = (S.roundNo < S.rounds) ? 'inline-block' : 'none';
-  btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
+btnNextRound?.addEventListener('click', async ()=>{
+  if (S.roundNo >= S.rounds) return; // spärr
+  S.roundNo += 1;
+  await enterRound();
+});
 
-  if (S.roundNo >= S.rounds) {
-    S.finished = true;          // markera att spelet är slut
-    btnNextRound.disabled = true;
-  }
-}
 
 
 // ===== Knappar =====
