@@ -1,5 +1,5 @@
 // ===== Multiplayer – konfig =====
-const ROUND_TIME_SEC = 60; // ändra om du vill
+const ROUND_TIME_SEC = 30; // 30 sek/omgång
 const CITY_CENTERS = {
   stockholm: {lat:59.334, lon:18.063},
   goteborg:  {lat:57.707, lon:11.967},
@@ -32,9 +32,9 @@ const gRoundNo = $('#gRoundNo');
 const gCode    = $('#gCode');
 const mpYou    = $('#mpYou');
 const tblBody  = $('#mpRoundTable tbody');  // döljs i MP
-const btnNextRound = $('#btnNextRound');
+const btnNextRound = $('#btnNextRound');    // döljs / används ej i auto-flödet
 const btnFinal     = $('#btnFinal');        // döljs helt
-const mpTimerEl    = $('#mpTimer');         // döljs (tid visas i panelen)
+const mpTimerEl    = $('#mpTimer');         // döljs (vi visar tid i panelen)
 
 // ===== Global state =====
 const S = {
@@ -49,8 +49,9 @@ const S = {
   currentClue: '',
   answerText: null,
   distanceText: null,
-  nextRoundLeft: null,    // sekunder tills nästa runda / final vid reveal
+  nextRoundLeft: null,    // sekunder till nästa runda/final efter reveal
   roundRevealed: false,   // om facit för aktuell runda är visat
+  timeoutPenalty: false,  // om vi fick 50 000 m pga timeout
 };
 
 // ===== Lager & städfunktion för rundgrafik =====
@@ -97,7 +98,7 @@ function hideSPBits(){
   const roundTable = document.getElementById('mpRoundTable');
   if (roundTable) roundTable.style.display = 'none';
   if (mpTimerEl) mpTimerEl.style.display = 'none';
-  if (btnFinal) btnFinal.style.display = 'none'; // ta bort knappen "Visa slutresultat"
+  if (btnFinal) btnFinal.style.display = 'none'; // ta bort "Visa slutresultat"
 }
 
 // ===== Totals & Sidebar-render =====
@@ -143,7 +144,7 @@ function renderSidebar(){
     roundListHtml = arr.map(r=>`<li>${esc(r.nickname)} – ${r.distance_m} m</li>`).join('') || '<li>—</li>';
   }
 
-  // Totalt (utan dubbel numrering)
+  // Totalt (utan extra "1.")
   const totals = computeTotals();
   const totalsList = totals.map(r=>`<li>${esc(r.nickname)} – ${r.total_m} m</li>`).join('') || '<li>—</li>';
 
@@ -159,9 +160,9 @@ function renderSidebar(){
     ? `<div class="sub"><em>${S.roundNo >= S.rounds ? 'Slutresultat visas om' : 'Ny runda startar om'}: ${S.nextRoundLeft}s</em></div>`
     : '';
 
+  // OBS: Vi visar inte "Runda • Kod" här (rubriken finns redan större ovanför)
   mpYou.innerHTML = `
     <div class="mp-panel">
-      <div class="row"><strong>Runda ${S.roundNo}</strong> • <strong>Kod ${esc(S.code)}</strong></div>
       <div class="row"><span class="lbl">Ledtråd:</span> <span id="mpClueText">${esc(S.currentClue||'')}</span></div>
       <div class="row"><span class="lbl">Tid:</span> <span id="mpTimeText">${mm}:${ss}</span></div>
       ${answerBlock}
@@ -203,6 +204,7 @@ async function enterLobby(){
   S.distanceText = null;
   S.nextRoundLeft = null;
   S.roundRevealed = false;
+  S.timeoutPenalty = false;
   renderSidebar();
 
   vLobby.style.display = 'block';
@@ -269,6 +271,7 @@ async function enterRound(){
   S.distanceText = null;
   S.nextRoundLeft = null;
   S.roundRevealed = false;
+  S.timeoutPenalty = false;
 
   clearRoundGraphics();
   if (S.revealCountdown){ clearInterval(S.revealCountdown); S.revealCountdown = null; }
@@ -319,7 +322,7 @@ function startCountdown(){
     if(S.timeLeft<=0){
       clearInterval(S.countdownTimer);
       if(!S.hasGuessed){
-        autoGuessBecauseTimeout(); // skickar gissning
+        autoGuessBecauseTimeout(); // timeout -> straffpoäng
       }
     }
   },1000);
@@ -328,6 +331,7 @@ function updateTimer(){
   renderSidebar(); // uppdatera tiden i panelen
 }
 async function autoGuessBecauseTimeout(){
+  // välj neutral punkt men markera timeout-straff
   let latlon = null;
   if(window.map){
     const c = window.map.getCenter();
@@ -337,15 +341,18 @@ async function autoGuessBecauseTimeout(){
   }else{
     latlon = {lat:59.334, lon:18.063}; // fallback Sthlm
   }
-  await sendGuess(latlon.lat, latlon.lon);
+  S.timeoutPenalty = true;
+  await sendGuess(latlon.lat, latlon.lon, { timedOut:true });
 }
 
 // ===== Skicka gissning =====
-async function sendGuess(lat, lon){
+async function sendGuess(lat, lon, opt={}){
   try{
+    const body = { code:S.code, nickname:S.nickname, lat, lon };
+    if (opt.timedOut){ body.timed_out = true; body.penalty_m = 50000; }
     const r = await fetchJson(`/api/match/guess?round_no=${S.roundNo}`, {
       method:'POST',
-      body:{ code:S.code, nickname:S.nickname, lat, lon }
+      body
     });
     S.hasGuessed = true;
     S.myGuess = {lat, lon};
@@ -424,9 +431,21 @@ async function showSolutionAndButtons(res){
     }catch{}
 
     if (S.myGuess){
-      const dkm = haversineKm(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon);
-      S.answerText = (sol.address || '').trim() || null;
-      S.distanceText = `${dkm.toFixed(2)} km`;
+      if (S.timeoutPenalty){
+        // tvinga 50 000 m lokalt (och i totals), om servern inte redan gjort det
+        const arr = S.roundBoards[S.roundNo] || [];
+        const idx = arr.findIndex(r=>r.nickname===S.nickname);
+        const rec = { nickname:S.nickname, distance_m:50000 };
+        if (idx>=0) arr[idx] = rec; else arr.push(rec);
+        S.roundBoards[S.roundNo] = arr;
+        S.answerText = (sol.address || '').trim() || null;
+        S.distanceText = `50.00 km`;
+      }else{
+        const dkm = haversineKm(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon);
+        S.answerText = (sol.address || '').trim() || null;
+        S.distanceText = `${dkm.toFixed(2)} km`;
+      }
+      renderSidebar();
     }
   }
 
@@ -460,7 +479,23 @@ async function showFinal(){
     const res = await fetchJson(`/api/match/final?code=${encodeURIComponent(S.code)}`);
     vGame.style.display='none';
     vFinal.style.display='block';
-    $('#finalBoard').innerHTML = (res.final||[]).map((r,i)=>`<li>${i+1}. ${esc(r.nickname)} – ${r.total_m} m</li>`).join('');
+
+    // rensa ev. gammalt innehåll
+    const ul = document.getElementById('finalBoard');
+    if (ul) ul.innerHTML = (res.final||[]).map((r,i)=>{
+      const nick = String(r.nickname||'').replace(/^\s*\d+[\.\)]?\s*/,''); // ta bort ev. inbyggd numrering
+      return `<li>${i+1}. ${esc(nick)} – ${r.total_m} m</li>`;
+    }).join('');
+
+    // "Spela igen"-knapp
+    if (!document.getElementById('btnPlayAgain')){
+      const btn = document.createElement('button');
+      btn.id = 'btnPlayAgain';
+      btn.textContent = 'Spela igen';
+      btn.style.marginTop = '12px';
+      btn.addEventListener('click', ()=>{ window.location.reload(); }); // tillbaka till startsidan
+      vFinal.appendChild(btn);
+    }
   }catch(e){ alert('Kunde inte hämta slutresultat: '+e.message); }
 }
 
