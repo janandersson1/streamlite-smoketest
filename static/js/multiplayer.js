@@ -42,7 +42,9 @@ const S = {
   players: [], hasGuessed: false, myGuess: null,
   pollTimer: null, countdownTimer: null, timeLeft: ROUND_TIME_SEC,
   mapLocked: false,
+  finished: false,            // <--- NY
 };
+
 
 // ===== Karta: lås/öppna interaktion =====
 function setMapLocked(flag){
@@ -111,6 +113,15 @@ async function enterRound(){
   clearInterval(S.countdownTimer);
   S.hasGuessed = false;
   S.myGuess = null;
+
+// rensa ev. grafik från föregående runda
+try{
+  if (typeof clearMapGraphics === 'function') clearMapGraphics();
+  if (window.guessMarker) { map.removeLayer(window.guessMarker); window.guessMarker = null; }
+  if (window.trueMarker)  { map.removeLayer(window.trueMarker);  window.trueMarker  = null; }
+  if (window.line)        { map.removeLayer(window.line);        window.line        = null; }
+}catch{}
+
   setMapLocked(false);
 
   vLobby.style.display='none';
@@ -267,6 +278,11 @@ async function showSolutionAndButtons(res){
   }
   btnNextRound.style.display = (S.roundNo < S.rounds) ? 'inline-block' : 'none';
   btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
+
+  if (S.roundNo >= S.rounds) {
+    S.finished = true;          // markera att spelet är slut
+    btnNextRound.disabled = true;
+  }
 }
 
 
