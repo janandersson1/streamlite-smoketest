@@ -246,6 +246,12 @@
 #mpRoundTable col.col-distance { width: 140px; }
 .badge{ padding:2px 8px; font-size:.8rem; } /* gör status-chip mindre */
 
+/* När vi är i multiplayer (Utmana) ska singelplayer-infoboxen döljas */
+body.is-mp #playCol .float-info { display: none !important; }
+/* (valfritt) låt kartan ta lite mer höjd när infoboxen är borta */
+body.is-mp #playCol #map { min-height: calc(100vh - 64px); }
+
+
 
   </style>
 </head>
@@ -772,6 +778,13 @@
     document.getElementById('tabAbout')?.classList.toggle('active', tab==='about');
 
     window.__MP_ACTIVE__ = (tab === 'utmana');
+
+  // NYTT: sätt en klass på body för att styra styling i MP-läge
+  document.body.classList.toggle('is-mp', tab === 'utmana');
+
+  // Fallback: toggla infoboxen direkt om CSS inte laddat
+  const floatInfo = document.querySelector('#playCol .float-info');
+  if (floatInfo) floatInfo.style.display = (tab === 'utmana') ? 'none' : '';
 
     if (tab === 'board') refreshLeaderboard();
     if (tab === 'about') renderReleaseNotes();
