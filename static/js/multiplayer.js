@@ -45,6 +45,21 @@ const S = {
   finished: false,            // <--- NY
 };
 
+// ===== Lager & städfunktion för rundgrafik =====
+function ensureRoundLayer(){
+  if (!window.map) return null;
+  if (!window.roundLayer) window.roundLayer = L.layerGroup().addTo(map);
+  return window.roundLayer;
+}
+function clearRoundGraphics(){
+  try{
+    if (window.roundLayer) window.roundLayer.clearLayers();
+    window.guessMarker = null;
+    window.trueMarker  = null;
+    window.line        = null;
+  }catch{}
+}
+
 
 // ===== Karta: lås/öppna interaktion =====
 function setMapLocked(flag){
@@ -71,6 +86,12 @@ function setMapLocked(flag){
 // ===== Kartklick => gissning =====
 window.onMapClick = async (lat, lon) => {
   if(vGame?.style.display==='block' && !S.hasGuessed && !S.mapLocked){
+    // RITA DIN MARKÖR DIREKT
+    try{
+      const layer = ensureRoundLayer();
+      if (window.guessMarker) layer.removeLayer(window.guessMarker);
+      window.guessMarker = L.marker([lat, lon], { title: 'Din gissning' }).addTo(layer);
+    }catch{}
     await sendGuess(lat, lon);
   }
 };
@@ -111,16 +132,28 @@ async function enterLobby(){
 async function enterRound(){
   clearInterval(S.pollTimer);
   clearInterval(S.countdownTimer);
+
+  // NEW: om vi redan passerat sista rundan -> visa final direkt
+  if (S.roundNo > S.rounds) {
+    S.finished = true;
+    try{
+      const res = await fetchJson(`/api/match/final?code=${encodeURIComponent(S.code)}`);
+      vLobby.style.display='none';
+      vGame.style.display='none';
+      vFinal.style.display='block';
+      $('#finalBoard').innerHTML = (res.final||[]).map((r,i)=>`<li>${i+1}. ${esc(r.nickname)} – ${r.total_m} m</li>`).join('');
+    }catch(e){
+      alert('Kunde inte hämta slutresultat: ' + e.message);
+    }
+    return;
+  }
+
   S.hasGuessed = false;
   S.myGuess = null;
 
-// rensa ev. grafik från föregående runda
-try{
-  if (typeof clearMapGraphics === 'function') clearMapGraphics();
-  if (window.guessMarker) { map.removeLayer(window.guessMarker); window.guessMarker = null; }
-  if (window.trueMarker)  { map.removeLayer(window.trueMarker);  window.trueMarker  = null; }
-  if (window.line)        { map.removeLayer(window.line);        window.line        = null; }
-}catch{}
+  clearRoundGraphics();
+  if (S.autoNextTimer){ clearInterval(S.autoNextTimer); S.autoNextTimer = null; }
+  if (S.revealCountdown){ clearInterval(S.revealCountdown); S.revealCountdown = null; }
 
   setMapLocked(false);
 
@@ -148,6 +181,8 @@ try{
   // starta nedräkning
   startCountdown();
 }
+
+
 
 // ===== Nedräkning/timeout =====
 function startCountdown(){
@@ -221,9 +256,17 @@ async function refreshRoundBoard(){
   }catch{}
 
   let res;
-  try{
+  try {
     res = await fetchJson(`/api/match/round_result?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
-  }catch(e){ return; }
+    // kasta bort ev. koordinater så vi inte råkar rita motståndares markörer
+    if (res && Array.isArray(res.leaderboard)) {
+      res.leaderboard = res.leaderboard.map(r => {
+        const { nickname, distance_m } = r ?? {};
+        return { nickname, distance_m };
+      });
+    }
+  } catch(e) { return; }
+
 
   const board = Array.isArray(res?.leaderboard) ? res.leaderboard : [];
   renderRoundBoard(board);
@@ -253,18 +296,30 @@ function renderRoundBoard(board){
 // ===== Facit + knappar =====
 async function showSolutionAndButtons(res){
   const sol = res?.solution;
+
+  // === RITA FACIT + DIN GISSNING OCH LINJEN ===
   if(sol?.lat!=null && sol?.lon!=null){
     try{
-      if(typeof clearMapGraphics==='function') clearMapGraphics();
-      if(S.myGuess){
-        const bearing = typeof bearingDeg==='function'
-          ? bearingDeg(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon) : 0;
-        window.guessMarker = L.marker([S.myGuess.lat,S.myGuess.lon], {icon: makeArrowIcon(bearing)}).addTo(map);
+      // rensa först så inget gammalt ligger kvar
+      clearRoundGraphics();
+      const layer = ensureRoundLayer();
+
+      // din gissning (om du hann gissa)
+      if (S.myGuess){
+        const bearing = (typeof bearingDeg==='function')
+          ? bearingDeg(S.myGuess.lat, S.myGuess.lon, sol.lat, sol.lon)
+          : 0;
+        // peka med pilen mot facit
+        window.guessMarker = L.marker([S.myGuess.lat, S.myGuess.lon], { icon: makeArrowIcon(bearing), title: 'Du' }).addTo(layer);
       }
-      window.trueMarker = L.marker([sol.lat,sol.lon], {icon: makeCheckIcon()}).addTo(map);
-      if(S.myGuess){
-        window.line = L.polyline([[S.myGuess.lat,S.myGuess.lon],[sol.lat,sol.lon]], {color:'#444', weight:2}).addTo(map);
-        map.fitBounds(window.line.getBounds(), {padding:[30,30]});
+
+      // facit
+      window.trueMarker = L.marker([sol.lat, sol.lon], { icon: makeCheckIcon(), title: 'Facit' }).addTo(layer);
+
+      // linje + fit
+      if (S.myGuess){
+        window.line = L.polyline([[S.myGuess.lat, S.myGuess.lon],[sol.lat, sol.lon]], { weight: 2 }).addTo(layer);
+        map.fitBounds(window.line.getBounds(), { padding:[30,30] });
       }
     }catch{}
     if($('#info') && S.myGuess){
@@ -275,11 +330,49 @@ async function showSolutionAndButtons(res){
         (addr ? ` · <strong>Rätt adress:</strong> ${esc(addr)}` : '') +
         `.`;
     }
-btnNextRound?.addEventListener('click', async ()=>{
-  if (S.roundNo >= S.rounds) return; // spärr
-  S.roundNo += 1;
-  await enterRound();
-});
+  }
+
+  // === GÖM "Nästa runda"-knappen och KÖR AUTO-NEDRÄKNING ===
+  // === GÖM "Nästa runda"-knappen och KÖR AUTO-NEDRÄKNING ===
+  btnNextRound.style.display = 'none';
+  btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
+
+  // Om spelet är slut, lås state och lämna
+  if (S.roundNo >= S.rounds) {
+    S.finished = true;
+    btnNextRound.disabled = true;
+    return;
+  }
+
+  // Annars: 10 sekunders nedräkning innan nästa runda
+  let left = 10;
+
+  const writeCountdown = () => {
+    const line = `<em>Ny runda startar om: ${left}s</em>`;
+    if ($('#info')) {
+      // ersätt/append snyggt
+      const base = $('#info').innerHTML.replace(/<br><em>Ny runda startar om: .*?<\/em>/, '');
+      $('#info').innerHTML = base + `<br>${line}`;
+    } else if (mpYou) {
+      mpYou.innerHTML = line;
+    }
+  };
+  writeCountdown();
+
+  if (S.revealCountdown) clearInterval(S.revealCountdown);
+  S.revealCountdown = setInterval(()=>{
+    left -= 1;
+    if (left <= 0){
+      clearInterval(S.revealCountdown);
+      S.revealCountdown = null;
+      S.roundNo += 1;
+      enterRound();
+    }else{
+      writeCountdown();
+    }
+  }, 1000);
+
+
 
 
 
