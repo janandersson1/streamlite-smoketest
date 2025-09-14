@@ -45,6 +45,12 @@ const S = {
   finished: false,
   revealCountdown: null,
   autoNextTimer: null,
+  // Sidebar-data
+  roundBoards: {},        // { [roundNo]: [{nickname, distance_m}] }
+  currentClue: '',
+  answerText: null,
+  distanceText: null,
+  nextRoundLeft: null,    // sekunder tills nästa runda vid reveal
 };
 
 // ===== Lager & städfunktion för rundgrafik =====
@@ -84,6 +90,64 @@ function setMapLocked(flag){
   }
 }
 
+// ===== Totals & Sidebar-render =====
+function computeTotals(){
+  const totals = new Map(); // nickname -> total_m
+  Object.values(S.roundBoards).forEach(arr=>{
+    (arr||[]).forEach(r=>{
+      if (typeof r.distance_m === 'number') {
+        totals.set(r.nickname, (totals.get(r.nickname)||0) + r.distance_m);
+      }
+    });
+  });
+  return Array.from(totals.entries())
+    .map(([nickname, total_m]) => ({nickname, total_m}))
+    .sort((a,b)=>a.total_m-b.total_m);
+}
+
+function renderSidebar(){
+  if (!mpYou) return;
+
+  // Tid (under ronden)
+  const t = Math.max(0, S.timeLeft|0);
+  const mm = String(Math.floor(t/60)).padStart(2,'0');
+  const ss = String(t%60).padStart(2,'0');
+
+  // Omgångens resultat
+  const roundArr = (S.roundBoards[S.roundNo]||[]).slice().sort((a,b)=>a.distance_m-b.distance_m);
+  const roundList = roundArr.map(r=>`<li>${esc(r.nickname)} – ${r.distance_m} m</li>`).join('') || '<li>—</li>';
+
+  // Totalt
+  const totals = computeTotals();
+  const totalsList = totals.map((r,i)=>`<li>${i+1}. ${esc(r.nickname)} – ${r.total_m} m</li>`).join('') || '<li>—</li>';
+
+  // Facit/avstånd
+  const answerBlock = S.answerText ? `
+    <div class="row"><span class="lbl">Rätt adress:</span> <span>${esc(S.answerText)}</span></div>
+    <div class="row"><span class="lbl">Ditt avstånd:</span> <span>${esc(S.distanceText||'')}</span></div>
+    <div style="height:8px"></div>
+  ` : '';
+
+  // “Ny runda startar om …”
+  const nextMsg = (S.nextRoundLeft!=null)
+    ? `<div class="sub"><em>Ny runda startar om: ${S.nextRoundLeft}s</em></div>`
+    : '';
+
+  mpYou.innerHTML = `
+    <div class="mp-panel">
+      <div class="row"><span class="lbl">Ledtråd:</span> <span id="mpClueText">${esc(S.currentClue||'')}</span></div>
+      <div class="row"><span class="lbl">Tid:</span> <span id="mpTimeText">${mm}:${ss}</span></div>
+      ${answerBlock}
+      ${nextMsg}
+      <div class="sub">Omgång ${S.roundNo}: resultat</div>
+      <ol id="mpRoundBoard">${roundList}</ol>
+      <div style="height:10px"></div>
+      <div class="sub">Totalställning</div>
+      <ol id="mpTotalsBoard">${totalsList}</ol>
+    </div>
+  `;
+}
+
 // ===== Kartklick => gissning =====
 window.onMapClick = async (lat, lon) => {
   if (vGame?.style.display==='block' && !S.hasGuessed && !S.mapLocked){
@@ -103,11 +167,23 @@ async function enterLobby(){
   clearInterval(S.countdownTimer);
   if (!S.roundNo) S.roundNo = 1;
 
+  // Göm ev. singelplayer-infobox i MP
+  const infoBox = $('#info');
+  if (infoBox) infoBox.style.display = 'none';
+
+  // Nollställ sidebar-data
+  S.roundBoards = {};
+  S.currentClue = '';
+  S.answerText = null;
+  S.distanceText = null;
+  S.nextRoundLeft = null;
+  renderSidebar();
+
   vLobby.style.display = 'block';
   vGame.style.display  = 'none';
   vFinal.style.display = 'none';
 
-  // Visa väntemeddelande
+  // Visa väntemeddelande i lobbyn
   const msgId = 'mpLobbyMsg';
   const msgEl = document.getElementById(msgId) || (() => {
     const p = document.createElement('p');
@@ -171,6 +247,9 @@ async function enterRound(){
 
   S.hasGuessed = false;
   S.myGuess = null;
+  S.answerText = null;
+  S.distanceText = null;
+  S.nextRoundLeft = null;
 
   clearRoundGraphics();
   if (S.autoNextTimer){ clearInterval(S.autoNextTimer); S.autoNextTimer = null; }
@@ -190,21 +269,20 @@ async function enterRound(){
 
   gRoundNo.textContent = S.roundNo;
   gCode.textContent    = S.code;
-  mpYou.textContent    = 'Klicka på kartan för att gissa.';
-  if($('#info')) $('#info').textContent = 'Klicka på kartan för att gissa.';
 
   // HÄMTA rundadata & sätt ledtråd (race-tåligt)
   let r = null;
   try{
     r = await fetchJson(`/api/match/round?code=${encodeURIComponent(S.code)}&round_no=${S.roundNo}`);
   }catch(e){ /* ronden publiceras strax – polling tar över */ }
-  const clue = r?.round?.clue || '';
+  S.currentClue = r?.round?.clue || '';
   const clueEl = document.getElementById('clue');
-  if (clueEl) clueEl.textContent = clue ? `Ledtråd: ${clue}` : 'Väntar på ledtråd…';
+  if (clueEl) clueEl.textContent = S.currentClue ? `Ledtråd: ${S.currentClue}` : 'Väntar på ledtråd…';
 
   // starta polling direkt (och kör en första uppdatering)
   clearInterval(S.pollTimer);
   S.pollTimer = setInterval(refreshRoundBoard, 2000);
+  renderSidebar();
   refreshRoundBoard();
 
   // starta nedräkning
@@ -231,6 +309,7 @@ function updateTimer(){
   const mm = String(Math.floor(t/60)).padStart(2,'0');
   const ss = String(t%60).padStart(2,'0');
   if(mpTimerEl) mpTimerEl.textContent = `${mm}:${ss}`;
+  renderSidebar(); // uppdatera tiden i panelen
 }
 async function autoGuessBecauseTimeout(){
   let latlon = null;
@@ -242,7 +321,6 @@ async function autoGuessBecauseTimeout(){
   }else{
     latlon = {lat:59.334, lon:18.063}; // fallback Sthlm
   }
-  mpYou.innerHTML = `Tiden tog slut – automatiskt skickad gissning. Väntar på övriga ...`;
   await sendGuess(latlon.lat, latlon.lon);
 }
 
@@ -256,17 +334,7 @@ async function sendGuess(lat, lon){
     S.hasGuessed = true;
     S.myGuess = {lat, lon};
     setMapLocked(true); // LÅS kartan efter gissning
-
-    const km = r?.distance_m!=null ? (r.distance_m/1000).toFixed(2) : null;
-    if($('#info')){
-      $('#info').innerHTML = km!=null
-        ? `<strong>Din gissning:</strong> ${km} km · väntar på övriga spelare ...`
-        : `Din gissning är mottagen – väntar på övriga spelare ...`;
-    }
-    mpYou.innerHTML = km!=null
-      ? `Du har gissat: <strong>${r.distance_m} m</strong> – väntar på övriga spelare ...`
-      : `Gissning mottagen – väntar på övriga spelare ...`;
-
+    renderSidebar();     // låt panelen visa timer/leaderboard, inga separata texter här
     await refreshRoundBoard();
   }catch(e){
     alert('Kunde inte skicka gissning: ' + e.message);
@@ -294,10 +362,16 @@ async function refreshRoundBoard(){
   } catch(e) { return; }
 
   const board = Array.isArray(res?.leaderboard) ? res.leaderboard : [];
-  renderRoundBoard(board);
 
-  // räkna unika klara (skydd mot dubletter)
-  const doneSet = new Set(board.map(r => r.nickname));
+  // Normalisera till unika per spelare
+  const uniq = Array.from(board.reduce((m, r)=> m.set(r.nickname, r), new Map()).values());
+  S.roundBoards[S.roundNo] = uniq;
+
+  renderRoundBoard(uniq); // för mittentabellen om du visar den
+  renderSidebar();        // uppdatera panelen
+
+  // räkna klara
+  const doneSet = new Set(uniq.map(r => r.nickname));
   const doneCount = doneSet.size;
   const total = new Set(S.players || []).size;
 
@@ -305,8 +379,6 @@ async function refreshRoundBoard(){
     clearInterval(S.pollTimer);
     clearInterval(S.countdownTimer);
     await showSolutionAndButtons(res);  // auto-reveal + auto-next
-  } else {
-    if ($('#info')) $('#info').innerHTML = `Väntar på övriga: <strong>${doneCount}/${total}</strong> spelare klara.`;
   }
 }
 
@@ -318,7 +390,7 @@ function renderRoundBoard(board){
     const distTxt = dist!=null ? `${dist} m` : '–';
     return `<tr><td>${esc(p)}</td><td>${status}</td><td>${distTxt}</td></tr>`;
   });
-  tblBody.innerHTML = rows.join('');
+  if (tblBody) tblBody.innerHTML = rows.join('');
 }
 
 // ===== Facit + knappar =====
@@ -345,50 +417,41 @@ async function showSolutionAndButtons(res){
         map.fitBounds(window.line.getBounds(), { padding:[30,30] });
       }
     }catch{}
-    if ($('#info') && S.myGuess){
+    if (S.myGuess){
       const dkm = haversineKm(S.myGuess.lat,S.myGuess.lon,sol.lat,sol.lon);
-      const addr = (sol.address || '').trim();
-      $('#info').innerHTML =
-        `<strong>Avstånd:</strong> ${dkm.toFixed(2)} km` +
-        (addr ? ` · <strong>Rätt adress:</strong> ${esc(addr)}` : '') +
-        `.`;
+      S.answerText = (sol.address || '').trim() || null;
+      S.distanceText = `${dkm.toFixed(2)} km`;
+      renderSidebar();
     }
   }
 
   // Dölj “Nästa runda”-knappen; visa Final-knapp på sista
-  btnNextRound.style.display = 'none';
-  btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
+  if (btnNextRound) btnNextRound.style.display = 'none';
+  if (btnFinal)     btnFinal.style.display     = (S.roundNo >= S.rounds) ? 'inline-block' : 'none';
 
   // Om spelet är slut – markera och lämna
   if (S.roundNo >= S.rounds) {
     S.finished = true;
-    btnNextRound.disabled = true;
+    if (btnNextRound) btnNextRound.disabled = true;
     return;
   }
 
-  // 10s countdown till nästa runda
-  let left = 10;
-  const writeCountdown = () => {
-    const line = `<em>Ny runda startar om: ${left}s</em>`;
-    if ($('#info')) {
-      const base = $('#info').innerHTML.replace(/<br><em>Ny runda startar om: .*?<\/em>/, '');
-      $('#info').innerHTML = base + `<br>${line}`;
-    } else if (mpYou) {
-      mpYou.innerHTML = line;
-    }
-  };
-  writeCountdown();
+  // 10s countdown till nästa runda (visa i panelen)
+  S.nextRoundLeft = 10;
+  renderSidebar();
 
   if (S.revealCountdown) clearInterval(S.revealCountdown);
   S.revealCountdown = setInterval(()=>{
-    left -= 1;
-    if (left <= 0){
+    S.nextRoundLeft -= 1;
+    if (S.nextRoundLeft <= 0){
       clearInterval(S.revealCountdown);
       S.revealCountdown = null;
+      S.nextRoundLeft = null;
       S.roundNo += 1;
+      renderSidebar();
       enterRound();
     }else{
-      writeCountdown();
+      renderSidebar();
     }
   }, 1000);
 }
